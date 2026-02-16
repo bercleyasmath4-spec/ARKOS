@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Settings, X, Plus, Trash2, CheckCircle2, 
-  Circle, AlertTriangle, Briefcase, Activity, Search, Bell, Shield, User, Globe, Smartphone, LogOut
+  Circle, AlertTriangle, Briefcase, Activity, Search, Bell, Shield, User, Globe, Smartphone, LogOut, Lock, Loader2
 } from 'lucide-react';
 import { INITIAL_STATE, PRIORITY_COLORS } from './constants';
 import { DashboardState, Task, Expense, PriorityLevel, ExpenseCategory } from './types';
@@ -15,12 +15,18 @@ import Login from './components/Login';
 import { supabase } from './lib/supabaseClient';
 
 const Dashboard: React.FC = () => {
-    const { user, signOut } = useAuth();
+    const { user, signOut, needsPasswordReset, setNeedsPasswordReset } = useAuth();
     const [activeTab, setActiveTab] = useState<TabType>('home');
     const [showSettings, setShowSettings] = useState(false);
     const [showAddModal, setShowAddModal] = useState<'task' | 'expense' | null>(null);
+    
+    // Internal Settings Password Change
     const [showPasswordReset, setShowPasswordReset] = useState(false);
     const [newPassword, setNewPassword] = useState('');
+    const [settingsNewPassword, setSettingsNewPassword] = useState('');
+    const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+    const [passwordUpdateStatus, setPasswordUpdateStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
+
     const [resetLoading, setResetLoading] = useState(false);
     const [resetMessage, setResetMessage] = useState<string | null>(null);
     const [isListening, setIsListening] = useState(false);
@@ -33,21 +39,23 @@ const Dashboard: React.FC = () => {
 
     const voiceService = useRef<GeminiVoiceService | null>(null);
 
+    // Sync state to local storage
     useEffect(() => {
         localStorage.setItem('arkos_db', JSON.stringify(state));
     }, [state]);
 
+    // Initialize voice service
     useEffect(() => {
         voiceService.current = new GeminiVoiceService();
         return () => voiceService.current?.stop();
     }, []);
 
+    // Effect to trigger password reset modal when recovery mode is active
     useEffect(() => {
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event) => {
-            if (event === 'PASSWORD_RECOVERY') setShowPasswordReset(true);
-        });
-        return () => subscription.unsubscribe();
-    }, []);
+        if (needsPasswordReset) {
+            setShowPasswordReset(true);
+        }
+    }, [needsPasswordReset]);
 
     const handlePasswordUpdate = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -56,12 +64,34 @@ const Dashboard: React.FC = () => {
         try {
             const { error } = await supabase.auth.updateUser({ password: newPassword });
             if (error) throw error;
-            setResetMessage("Password updated successfully!");
-            setTimeout(() => setShowPasswordReset(false), 2000);
+            setResetMessage("Passcode successfully encrypted and stored.");
+            setNeedsPasswordReset(false); // Clear recovery flag
+            setTimeout(() => {
+                setShowPasswordReset(false);
+                setResetMessage(null);
+                setNewPassword('');
+            }, 2000);
         } catch (error: any) {
-            setResetMessage(`Error: ${error.message}`);
+            setResetMessage(`Security Error: ${error.message}`);
         } finally {
             setResetLoading(false);
+        }
+    };
+
+    const handleInternalPasswordChange = async () => {
+        if (!settingsNewPassword) return;
+        setIsUpdatingPassword(true);
+        setPasswordUpdateStatus(null);
+        try {
+            const { error } = await supabase.auth.updateUser({ password: settingsNewPassword });
+            if (error) throw error;
+            setPasswordUpdateStatus({ type: 'success', msg: 'PASSCODE UPDATED' });
+            setSettingsNewPassword('');
+            setTimeout(() => setPasswordUpdateStatus(null), 3000);
+        } catch (err: any) {
+            setPasswordUpdateStatus({ type: 'error', msg: err.message || 'UPDATE FAILED' });
+        } finally {
+            setIsUpdatingPassword(false);
         }
     };
 
@@ -214,10 +244,15 @@ const Dashboard: React.FC = () => {
 
             {showSettings && (
                 <div className="fixed inset-0 z-[120] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
-                    <GlassCard className="w-full max-w-md p-8 relative">
-                        <button onClick={() => setShowSettings(false)} className="absolute top-4 right-4 text-white/40 hover:text-white"><X size={24} /></button>
-                        <h2 className="text-xl font-bold text-white mb-6">System Settings</h2>
-                        <div className="space-y-4">
+                    <GlassCard className="w-full max-w-md p-8 relative max-h-[90vh] overflow-y-auto">
+                        <button onClick={() => {
+                            setShowSettings(false);
+                            setPasswordUpdateStatus(null);
+                        }} className="absolute top-4 right-4 text-white/40 hover:text-white"><X size={24} /></button>
+                        
+                        <h2 className="text-xl font-bold text-white mb-6 uppercase tracking-wider">System Settings</h2>
+                        
+                        <div className="space-y-4 mb-8">
                             {[
                                 { label: 'Network Security', icon: Shield, value: 'Encrypted' },
                                 { label: 'Voice Response', icon: Smartphone, value: 'Zephyr' },
@@ -233,7 +268,37 @@ const Dashboard: React.FC = () => {
                                 </div>
                             ))}
                         </div>
-                        <div className="mt-8 space-y-3">
+
+                        {/* Security Protocol: Change Password */}
+                        <div className="p-4 rounded-xl bg-white/5 border border-white/10 mb-8">
+                            <div className="flex items-center gap-2 mb-4">
+                                <Lock size={16} className="text-cyan-400" />
+                                <h3 className="text-xs font-bold text-white/60 uppercase tracking-widest">Security Protocol</h3>
+                            </div>
+                            <div className="space-y-3">
+                                <input 
+                                    type="password"
+                                    value={settingsNewPassword}
+                                    onChange={(e) => setSettingsNewPassword(e.target.value)}
+                                    placeholder="NEW PASSCODE..."
+                                    className="w-full bg-black/40 border border-white/10 p-3 rounded-lg text-white text-xs focus:border-cyan-400 outline-none transition-all"
+                                />
+                                {passwordUpdateStatus && (
+                                    <p className={`text-[10px] font-bold text-center uppercase tracking-wider ${passwordUpdateStatus.type === 'error' ? 'text-red-400' : 'text-green-400'}`}>
+                                        {passwordUpdateStatus.msg}
+                                    </p>
+                                )}
+                                <button 
+                                    onClick={handleInternalPasswordChange}
+                                    disabled={isUpdatingPassword || !settingsNewPassword}
+                                    className="w-full py-3 bg-cyan-400/10 border border-cyan-400/30 rounded-lg text-cyan-400 text-[10px] font-bold uppercase tracking-widest hover:bg-cyan-400/20 disabled:opacity-30 flex items-center justify-center gap-2"
+                                >
+                                    {isUpdatingPassword ? <Loader2 size={14} className="animate-spin" /> : 'Update Passcode'}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="space-y-3">
                             <button onClick={signOut} className="w-full py-4 bg-white/5 border border-white/10 rounded-xl text-white/70 font-bold text-sm tracking-widest uppercase hover:bg-white/10 transition-all flex items-center justify-center gap-2">
                                 <LogOut size={16} /> Disconnect
                             </button>
@@ -244,14 +309,37 @@ const Dashboard: React.FC = () => {
             )}
 
             {showPasswordReset && (
-                <div className="fixed inset-0 z-[130] flex items-center justify-center p-6 bg-black/90 backdrop-blur-md animate-in zoom-in duration-300">
-                    <GlassCard className="w-full max-w-sm p-8 border-cyan-400/40">
-                        <h2 className="text-lg font-bold text-white mb-6 uppercase tracking-widest text-center">Secure New Passcode</h2>
+                <div className="fixed inset-0 z-[130] flex items-center justify-center p-6 bg-black/95 backdrop-blur-xl animate-in zoom-in duration-300">
+                    <GlassCard className="w-full max-w-sm p-8 border-cyan-400 shadow-[0_0_50px_rgba(0,242,255,0.2)]">
+                        <div className="flex flex-col items-center mb-6">
+                            <div className="w-12 h-12 rounded-full bg-cyan-400/10 flex items-center justify-center mb-4">
+                                <Shield className="text-cyan-400" size={24} />
+                            </div>
+                            <h2 className="text-lg font-bold text-white uppercase tracking-widest text-center">Protocol Recovery</h2>
+                            <p className="text-[10px] text-cyan-400/60 font-bold uppercase mt-1 tracking-widest">A.R.K.O.S. Security Override</p>
+                        </div>
+                        
                         <form onSubmit={handlePasswordUpdate} className="space-y-4">
-                            <input required type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="NEW PASSCODE..." className="w-full bg-white/5 border border-white/10 p-3 rounded-lg text-white text-sm focus:border-cyan-400 outline-none" />
-                            {resetMessage && <p className={`text-xs text-center ${resetMessage.includes('Error') ? 'text-red-400' : 'text-green-400'}`}>{resetMessage}</p>}
-                            <button type="submit" disabled={resetLoading} className="w-full py-3 bg-cyan-400 text-black font-extrabold text-xs rounded-lg shadow-lg shadow-cyan-400/20">CONFIRM UPDATE</button>
-                            <button type="button" onClick={() => setShowPasswordReset(false)} className="w-full py-2 text-white/30 text-xs">Cancel</button>
+                            <div className="space-y-1">
+                                <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">New System Passcode</label>
+                                <input required type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="ENTER NEW PASSCODE..." className="w-full bg-white/5 border border-white/10 p-3 rounded-lg text-white text-sm focus:border-cyan-400 outline-none transition-all" />
+                            </div>
+                            
+                            {resetMessage && (
+                                <p className={`text-[10px] text-center font-bold uppercase tracking-widest ${resetMessage.includes('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                                    {resetMessage}
+                                </p>
+                            )}
+                            
+                            <button type="submit" disabled={resetLoading || !newPassword} className="w-full py-3 bg-cyan-400 text-black font-black text-xs rounded-lg shadow-[0_0_20px_rgba(0,242,255,0.3)] hover:bg-cyan-300 transition-all disabled:opacity-50">
+                                {resetLoading ? 'ENCRYPTING...' : 'CONFIRM ACCESS KEY'}
+                            </button>
+                            
+                            {!needsPasswordReset && (
+                                <button type="button" onClick={() => setShowPasswordReset(false)} className="w-full py-2 text-white/30 text-[10px] font-bold uppercase tracking-widest hover:text-white transition-colors">
+                                    Cancel
+                                </button>
+                            )}
                         </form>
                     </GlassCard>
                 </div>
