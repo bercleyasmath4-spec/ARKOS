@@ -62,6 +62,11 @@ export class GeminiVoiceService {
     
     this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
     this.outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    
+    // Ensure context is running (fixes silent starts)
+    if (this.outputAudioContext.state === 'suspended') {
+      await this.outputAudioContext.resume();
+    }
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
@@ -75,9 +80,9 @@ export class GeminiVoiceService {
     Your MANDATE:
     1. If the user mentions a new task, tasking, or protocol, IMMEDIATELY call 'addTask'.
     2. If the user mentions a purchase, cost, or expense, IMMEDIATELY call 'addExpense'.
-    3. Confirm actions with a professional, slightly witty tone.
+    3. You MUST always confirm actions verbally with a professional, slightly witty tone.
     4. Keep spoken responses concise.
-    Always use tools for data modification.`;
+    Always use tools for data modification. After tool calls, verify the result to the user.`;
 
     this.sessionPromise = this.ai.live.connect({
       model: 'gemini-2.5-flash-native-audio-preview-12-2025',
@@ -100,16 +105,14 @@ export class GeminiVoiceService {
         onmessage: async (message: LiveServerMessage) => {
           if (!this.active) return;
 
-          // Process Tool Calls (Function Calling)
           if (message.toolCall) {
             for (const fc of message.toolCall.functionCalls) {
               let executionResult = "Action complete.";
-              
               if (fc.name === 'addTask') {
                 const title = String(fc.args.title || "Untitled Task");
                 const priority = (fc.args.priority as PriorityLevel) || 'Standard';
                 callbacks.onAddTask?.(title, priority);
-                executionResult = `Protocol ${title} has been initialized.`;
+                executionResult = `Protocol ${title} initialized at ${priority} priority level.`;
               } else if (fc.name === 'addExpense') {
                 const label = String(fc.args.label || "Miscellaneous");
                 const amount = Number(fc.args.amount) || 0;
@@ -118,7 +121,6 @@ export class GeminiVoiceService {
                 executionResult = `Transaction for ${label} of $${amount} logged to secure ledger.`;
               }
               
-              // Corrected: Using single object structure as per prompt instructions
               this.sessionPromise?.then((session) => {
                 session.sendToolResponse({
                   functionResponses: { 
@@ -131,12 +133,10 @@ export class GeminiVoiceService {
             }
           }
 
-          // Handle audio transcription from the model
           if (message.serverContent?.outputTranscription) {
             callbacks.onMessage?.(message.serverContent.outputTranscription.text);
           }
 
-          // Handle audio stream from the model
           if (this.outputAudioContext) {
             const parts = message.serverContent?.modelTurn?.parts || [];
             for (const part of parts) {
