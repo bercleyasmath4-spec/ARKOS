@@ -4,15 +4,15 @@ import {
   Settings, X, Plus, Trash2, CheckCircle2, 
   Circle, AlertTriangle, Briefcase, Activity, Search, Bell, Shield, User, Globe, Smartphone, LogOut, Lock, Loader2
 } from 'lucide-react';
-import { INITIAL_STATE, PRIORITY_COLORS } from './constants';
-import { DashboardState, Task, Expense, PriorityLevel, ExpenseCategory } from './types';
-import JarvisOrb from './components/JarvisOrb';
-import NavigationBar, { TabType } from './components/NavigationBar';
-import GlassCard from './components/GlassCard';
-import { GeminiVoiceService } from './services/geminiLive';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
-import Login from './components/Login';
-import { supabase } from './lib/supabaseClient';
+import { INITIAL_STATE, PRIORITY_COLORS } from './constants.tsx';
+import { DashboardState, Task, Expense, PriorityLevel, ExpenseCategory } from './types.ts';
+import JarvisOrb from './components/JarvisOrb.tsx';
+import NavigationBar, { TabType } from './components/NavigationBar.tsx';
+import GlassCard from './components/GlassCard.tsx';
+import { GeminiVoiceService } from './services/geminiLive.ts';
+import { AuthProvider, useAuth } from './contexts/AuthContext.tsx';
+import Login from './components/Login.tsx';
+import { supabase } from './lib/supabaseClient.ts';
 
 const Dashboard: React.FC = () => {
     const { user, signOut, needsPasswordReset, setNeedsPasswordReset } = useAuth();
@@ -33,8 +33,17 @@ const Dashboard: React.FC = () => {
     const [voiceText, setVoiceText] = useState('SYSTEM ONLINE');
     
     const [state, setState] = useState<DashboardState>(() => {
-        const saved = localStorage.getItem('arkos_db');
-        return saved ? JSON.parse(saved) : INITIAL_STATE;
+        try {
+            const saved = localStorage.getItem('arkos_db');
+            if (!saved) return INITIAL_STATE;
+            const parsed = JSON.parse(saved);
+            // Basic validation
+            if (!parsed.tasks || !parsed.expenses) return INITIAL_STATE;
+            return parsed;
+        } catch (e) {
+            console.error("Failed to parse state from localStorage", e);
+            return INITIAL_STATE;
+        }
     });
 
     const voiceService = useRef<GeminiVoiceService | null>(null);
@@ -175,7 +184,7 @@ const Dashboard: React.FC = () => {
                                 <div className={`p-3 rounded-full text-black shadow-lg transition-all ${isListening ? 'bg-red-500 animate-pulse' : 'bg-cyan-400 group-hover:scale-110'}`}>
                                     <Activity size={20} />
                                 </div>
-                                <div>
+                                <div className="flex-1">
                                     <h3 className="text-white font-bold text-sm tracking-wide">{isListening ? 'SYSTEM LISTENING...' : 'REQUEST MISSION BRIEFING'}</h3>
                                     <p className="text-cyan-400/60 text-[10px] uppercase font-bold tracking-widest">{isListening ? 'Awaiting Audio Input' : 'Voice Authorized Access Only'}</p>
                                 </div>
@@ -221,7 +230,7 @@ const Dashboard: React.FC = () => {
                                             <div className="flex-1 min-w-0">
                                                 <h4 className={`text-sm font-medium transition-all ${task.completed ? 'text-white/20 line-through' : 'text-white'}`}>{task.title}</h4>
                                                 <div className="flex items-center gap-2 mt-1">
-                                                    <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-white/10" style={{ color: PRIORITY_COLORS[task.priority] }}>{task.priority}</span>
+                                                    <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-white/10" style={{ color: (PRIORITY_COLORS as any)[task.priority] || '#FFF' }}>{task.priority}</span>
                                                     <span className="text-[10px] text-white/30">{task.deadline}</span>
                                                 </div>
                                             </div>
@@ -326,7 +335,7 @@ const Dashboard: React.FC = () => {
                             </div>
                             
                             {resetMessage && (
-                                <p className={`text-[10px] text-center font-bold uppercase tracking-widest ${resetMessage.includes('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                                <p className={`text-[10px] text-center font-bold uppercase tracking-widest ${resetMessage.includes('Security Error') ? 'text-red-400' : 'text-green-400'}`}>
                                     {resetMessage}
                                 </p>
                             )}
@@ -410,7 +419,10 @@ const AppContent: React.FC = () => {
     const { user, loading } = useAuth();
     if (loading) return (
         <div className="min-h-screen bg-[#050505] flex items-center justify-center">
-            <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-cyan-400"></div>
+            <div className="flex flex-col items-center gap-4">
+                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-cyan-400"></div>
+                <p className="text-cyan-400/40 text-[10px] font-bold tracking-[0.2em] uppercase">Booting A.R.K.O.S.</p>
+            </div>
         </div>
     );
     return user ? <Dashboard /> : <Login />;

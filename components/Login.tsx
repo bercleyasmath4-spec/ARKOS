@@ -1,8 +1,8 @@
 
 import React, { useState } from 'react';
-import { supabase } from '../lib/supabaseClient';
+import { supabase } from '../lib/supabaseClient.ts';
 import { Fuel, Lock, Mail, ArrowRight, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
-import GlassCard from './GlassCard';
+import GlassCard from './GlassCard.tsx';
 
 export default function Login() {
     const [loading, setLoading] = useState(false);
