@@ -20,10 +20,14 @@ const Dashboard: React.FC = () => {
     const [showSettings, setShowSettings] = useState(false);
     const [showAddModal, setShowAddModal] = useState<'task' | 'expense' | null>(null);
     
-    // Internal Settings Password Change
+    // Recovery Passcode Reset
     const [showPasswordReset, setShowPasswordReset] = useState(false);
     const [newPassword, setNewPassword] = useState('');
+    const [confirmNewPassword, setConfirmNewPassword] = useState('');
+    
+    // Internal Settings Passcode Change
     const [settingsNewPassword, setSettingsNewPassword] = useState('');
+    const [settingsConfirmPassword, setSettingsConfirmPassword] = useState('');
     const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
     const [passwordUpdateStatus, setPasswordUpdateStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
 
@@ -37,7 +41,6 @@ const Dashboard: React.FC = () => {
             const saved = localStorage.getItem('arkos_db');
             if (!saved) return INITIAL_STATE;
             const parsed = JSON.parse(saved);
-            // Basic validation
             if (!parsed.tasks || !parsed.expenses) return INITIAL_STATE;
             return parsed;
         } catch (e) {
@@ -48,18 +51,15 @@ const Dashboard: React.FC = () => {
 
     const voiceService = useRef<GeminiVoiceService | null>(null);
 
-    // Sync state to local storage
     useEffect(() => {
         localStorage.setItem('arkos_db', JSON.stringify(state));
     }, [state]);
 
-    // Initialize voice service
     useEffect(() => {
         voiceService.current = new GeminiVoiceService();
         return () => voiceService.current?.stop();
     }, []);
 
-    // Effect to trigger password reset modal when recovery mode is active
     useEffect(() => {
         if (needsPasswordReset) {
             setShowPasswordReset(true);
@@ -68,17 +68,22 @@ const Dashboard: React.FC = () => {
 
     const handlePasswordUpdate = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (newPassword !== confirmNewPassword) {
+            setResetMessage("Security Error: Passcodes do not match.");
+            return;
+        }
         setResetLoading(true);
         setResetMessage(null);
         try {
             const { error } = await supabase.auth.updateUser({ password: newPassword });
             if (error) throw error;
             setResetMessage("Passcode successfully encrypted and stored.");
-            setNeedsPasswordReset(false); // Clear recovery flag
+            setNeedsPasswordReset(false);
             setTimeout(() => {
                 setShowPasswordReset(false);
                 setResetMessage(null);
                 setNewPassword('');
+                setConfirmNewPassword('');
             }, 2000);
         } catch (error: any) {
             setResetMessage(`Security Error: ${error.message}`);
@@ -88,7 +93,11 @@ const Dashboard: React.FC = () => {
     };
 
     const handleInternalPasswordChange = async () => {
-        if (!settingsNewPassword) return;
+        if (!settingsNewPassword || !settingsConfirmPassword) return;
+        if (settingsNewPassword !== settingsConfirmPassword) {
+            setPasswordUpdateStatus({ type: 'error', msg: 'PASSCODES DO NOT MATCH' });
+            return;
+        }
         setIsUpdatingPassword(true);
         setPasswordUpdateStatus(null);
         try {
@@ -96,6 +105,7 @@ const Dashboard: React.FC = () => {
             if (error) throw error;
             setPasswordUpdateStatus({ type: 'success', msg: 'PASSCODE UPDATED' });
             setSettingsNewPassword('');
+            setSettingsConfirmPassword('');
             setTimeout(() => setPasswordUpdateStatus(null), 3000);
         } catch (err: any) {
             setPasswordUpdateStatus({ type: 'error', msg: err.message || 'UPDATE FAILED' });
@@ -292,6 +302,13 @@ const Dashboard: React.FC = () => {
                                     placeholder="NEW PASSCODE..."
                                     className="w-full bg-black/40 border border-white/10 p-3 rounded-lg text-white text-xs focus:border-cyan-400 outline-none transition-all"
                                 />
+                                <input 
+                                    type="password"
+                                    value={settingsConfirmPassword}
+                                    onChange={(e) => setSettingsConfirmPassword(e.target.value)}
+                                    placeholder="CONFIRM PASSCODE..."
+                                    className="w-full bg-black/40 border border-white/10 p-3 rounded-lg text-white text-xs focus:border-cyan-400 outline-none transition-all"
+                                />
                                 {passwordUpdateStatus && (
                                     <p className={`text-[10px] font-bold text-center uppercase tracking-wider ${passwordUpdateStatus.type === 'error' ? 'text-red-400' : 'text-green-400'}`}>
                                         {passwordUpdateStatus.msg}
@@ -299,7 +316,7 @@ const Dashboard: React.FC = () => {
                                 )}
                                 <button 
                                     onClick={handleInternalPasswordChange}
-                                    disabled={isUpdatingPassword || !settingsNewPassword}
+                                    disabled={isUpdatingPassword || !settingsNewPassword || !settingsConfirmPassword}
                                     className="w-full py-3 bg-cyan-400/10 border border-cyan-400/30 rounded-lg text-cyan-400 text-[10px] font-bold uppercase tracking-widest hover:bg-cyan-400/20 disabled:opacity-30 flex items-center justify-center gap-2"
                                 >
                                     {isUpdatingPassword ? <Loader2 size={14} className="animate-spin" /> : 'Update Passcode'}
@@ -329,23 +346,34 @@ const Dashboard: React.FC = () => {
                         </div>
                         
                         <form onSubmit={handlePasswordUpdate} className="space-y-4">
-                            <div className="space-y-1">
-                                <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">New System Passcode</label>
-                                <input required type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="ENTER NEW PASSCODE..." className="w-full bg-white/5 border border-white/10 p-3 rounded-lg text-white text-sm focus:border-cyan-400 outline-none transition-all" />
+                            <div className="space-y-4">
+                                <div className="space-y-1">
+                                    <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">New Passcode</label>
+                                    <input required type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="ENTER NEW PASSCODE..." className="w-full bg-white/5 border border-white/10 p-3 rounded-lg text-white text-sm focus:border-cyan-400 outline-none transition-all" />
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">Confirm Passcode</label>
+                                    <input required type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} placeholder="VERIFY NEW PASSCODE..." className="w-full bg-white/5 border border-white/10 p-3 rounded-lg text-white text-sm focus:border-cyan-400 outline-none transition-all" />
+                                </div>
                             </div>
                             
                             {resetMessage && (
-                                <p className={`text-[10px] text-center font-bold uppercase tracking-widest ${resetMessage.includes('Security Error') ? 'text-red-400' : 'text-green-400'}`}>
+                                <p className={`text-[10px] text-center font-bold uppercase tracking-widest ${resetMessage.includes('Error') ? 'text-red-400' : 'text-green-400'}`}>
                                     {resetMessage}
                                 </p>
                             )}
                             
-                            <button type="submit" disabled={resetLoading || !newPassword} className="w-full py-3 bg-cyan-400 text-black font-black text-xs rounded-lg shadow-[0_0_20px_rgba(0,242,255,0.3)] hover:bg-cyan-300 transition-all disabled:opacity-50">
+                            <button type="submit" disabled={resetLoading || !newPassword || !confirmNewPassword} className="w-full py-3 bg-cyan-400 text-black font-black text-xs rounded-lg shadow-[0_0_20px_rgba(0,242,255,0.3)] hover:bg-cyan-300 transition-all disabled:opacity-50">
                                 {resetLoading ? 'ENCRYPTING...' : 'CONFIRM ACCESS KEY'}
                             </button>
                             
                             {!needsPasswordReset && (
-                                <button type="button" onClick={() => setShowPasswordReset(false)} className="w-full py-2 text-white/30 text-[10px] font-bold uppercase tracking-widest hover:text-white transition-colors">
+                                <button type="button" onClick={() => {
+                                    setShowPasswordReset(false);
+                                    setNewPassword('');
+                                    setConfirmNewPassword('');
+                                    setResetMessage(null);
+                                }} className="w-full py-2 text-white/30 text-[10px] font-bold uppercase tracking-widest hover:text-white transition-colors">
                                     Cancel
                                 </button>
                             )}
