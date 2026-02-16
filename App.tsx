@@ -20,12 +20,13 @@ const Dashboard: React.FC = () => {
     const [showSettings, setShowSettings] = useState(false);
     const [showAddModal, setShowAddModal] = useState<'task' | 'expense' | null>(null);
     
-    // Recovery Passcode Reset
+    // Recovery Passcode Reset (From Email)
     const [showPasswordReset, setShowPasswordReset] = useState(false);
     const [newPassword, setNewPassword] = useState('');
     const [confirmNewPassword, setConfirmNewPassword] = useState('');
     
     // Internal Settings Passcode Change
+    const [settingsOldPassword, setSettingsOldPassword] = useState('');
     const [settingsNewPassword, setSettingsNewPassword] = useState('');
     const [settingsConfirmPassword, setSettingsConfirmPassword] = useState('');
     const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
@@ -66,6 +67,7 @@ const Dashboard: React.FC = () => {
         }
     }, [needsPasswordReset]);
 
+    // Handler for recovery (email link) password update
     const handlePasswordUpdate = async (e: React.FormEvent) => {
         e.preventDefault();
         if (newPassword !== confirmNewPassword) {
@@ -92,18 +94,37 @@ const Dashboard: React.FC = () => {
         }
     };
 
+    // Handler for internal settings password update (requires old password)
     const handleInternalPasswordChange = async () => {
-        if (!settingsNewPassword || !settingsConfirmPassword) return;
-        if (settingsNewPassword !== settingsConfirmPassword) {
-            setPasswordUpdateStatus({ type: 'error', msg: 'PASSCODES DO NOT MATCH' });
+        if (!settingsOldPassword || !settingsNewPassword || !settingsConfirmPassword) {
+            setPasswordUpdateStatus({ type: 'error', msg: 'ALL FIELDS REQUIRED' });
             return;
         }
+        if (settingsNewPassword !== settingsConfirmPassword) {
+            setPasswordUpdateStatus({ type: 'error', msg: 'NEW PASSCODES DO NOT MATCH' });
+            return;
+        }
+        
         setIsUpdatingPassword(true);
         setPasswordUpdateStatus(null);
+        
         try {
-            const { error } = await supabase.auth.updateUser({ password: settingsNewPassword });
-            if (error) throw error;
+            // Step 1: Verify identity by signing in with the old password
+            const { error: authError } = await supabase.auth.signInWithPassword({
+                email: user?.email || '',
+                password: settingsOldPassword,
+            });
+
+            if (authError) {
+                throw new Error("INVALID CURRENT PASSCODE");
+            }
+
+            // Step 2: Proceed with update
+            const { error: updateError } = await supabase.auth.updateUser({ password: settingsNewPassword });
+            if (updateError) throw updateError;
+
             setPasswordUpdateStatus({ type: 'success', msg: 'PASSCODE UPDATED' });
+            setSettingsOldPassword('');
             setSettingsNewPassword('');
             setSettingsConfirmPassword('');
             setTimeout(() => setPasswordUpdateStatus(null), 3000);
@@ -267,6 +288,7 @@ const Dashboard: React.FC = () => {
                         <button onClick={() => {
                             setShowSettings(false);
                             setPasswordUpdateStatus(null);
+                            setSettingsOldPassword('');
                         }} className="absolute top-4 right-4 text-white/40 hover:text-white"><X size={24} /></button>
                         
                         <h2 className="text-xl font-bold text-white mb-6 uppercase tracking-wider">System Settings</h2>
@@ -295,20 +317,38 @@ const Dashboard: React.FC = () => {
                                 <h3 className="text-xs font-bold text-white/60 uppercase tracking-widest">Security Protocol</h3>
                             </div>
                             <div className="space-y-3">
-                                <input 
-                                    type="password"
-                                    value={settingsNewPassword}
-                                    onChange={(e) => setSettingsNewPassword(e.target.value)}
-                                    placeholder="NEW PASSCODE..."
-                                    className="w-full bg-black/40 border border-white/10 p-3 rounded-lg text-white text-xs focus:border-cyan-400 outline-none transition-all"
-                                />
-                                <input 
-                                    type="password"
-                                    value={settingsConfirmPassword}
-                                    onChange={(e) => setSettingsConfirmPassword(e.target.value)}
-                                    placeholder="CONFIRM PASSCODE..."
-                                    className="w-full bg-black/40 border border-white/10 p-3 rounded-lg text-white text-xs focus:border-cyan-400 outline-none transition-all"
-                                />
+                                <div className="space-y-1">
+                                    <label className="text-[8px] font-bold text-white/40 uppercase tracking-widest ml-1">Current Passcode</label>
+                                    <input 
+                                        type="password"
+                                        value={settingsOldPassword}
+                                        onChange={(e) => setSettingsOldPassword(e.target.value)}
+                                        placeholder="REQUIRED TO AUTHORIZE..."
+                                        className="w-full bg-black/40 border border-white/10 p-3 rounded-lg text-white text-xs focus:border-cyan-400 outline-none transition-all"
+                                    />
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div className="space-y-1">
+                                        <label className="text-[8px] font-bold text-white/40 uppercase tracking-widest ml-1">New Passcode</label>
+                                        <input 
+                                            type="password"
+                                            value={settingsNewPassword}
+                                            onChange={(e) => setSettingsNewPassword(e.target.value)}
+                                            placeholder="NEW..."
+                                            className="w-full bg-black/40 border border-white/10 p-3 rounded-lg text-white text-xs focus:border-cyan-400 outline-none transition-all"
+                                        />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-[8px] font-bold text-white/40 uppercase tracking-widest ml-1">Verify New</label>
+                                        <input 
+                                            type="password"
+                                            value={settingsConfirmPassword}
+                                            onChange={(e) => setSettingsConfirmPassword(e.target.value)}
+                                            placeholder="CONFIRM..."
+                                            className="w-full bg-black/40 border border-white/10 p-3 rounded-lg text-white text-xs focus:border-cyan-400 outline-none transition-all"
+                                        />
+                                    </div>
+                                </div>
                                 {passwordUpdateStatus && (
                                     <p className={`text-[10px] font-bold text-center uppercase tracking-wider ${passwordUpdateStatus.type === 'error' ? 'text-red-400' : 'text-green-400'}`}>
                                         {passwordUpdateStatus.msg}
@@ -316,10 +356,10 @@ const Dashboard: React.FC = () => {
                                 )}
                                 <button 
                                     onClick={handleInternalPasswordChange}
-                                    disabled={isUpdatingPassword || !settingsNewPassword || !settingsConfirmPassword}
+                                    disabled={isUpdatingPassword || !settingsOldPassword || !settingsNewPassword || !settingsConfirmPassword}
                                     className="w-full py-3 bg-cyan-400/10 border border-cyan-400/30 rounded-lg text-cyan-400 text-[10px] font-bold uppercase tracking-widest hover:bg-cyan-400/20 disabled:opacity-30 flex items-center justify-center gap-2"
                                 >
-                                    {isUpdatingPassword ? <Loader2 size={14} className="animate-spin" /> : 'Update Passcode'}
+                                    {isUpdatingPassword ? <Loader2 size={14} className="animate-spin" /> : 'Authorize & Update'}
                                 </button>
                             </div>
                         </div>
@@ -348,11 +388,11 @@ const Dashboard: React.FC = () => {
                         <form onSubmit={handlePasswordUpdate} className="space-y-4">
                             <div className="space-y-4">
                                 <div className="space-y-1">
-                                    <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">New Passcode</label>
+                                    <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">New System Passcode</label>
                                     <input required type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="ENTER NEW PASSCODE..." className="w-full bg-white/5 border border-white/10 p-3 rounded-lg text-white text-sm focus:border-cyan-400 outline-none transition-all" />
                                 </div>
                                 <div className="space-y-1">
-                                    <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">Confirm Passcode</label>
+                                    <label className="text-[9px] font-bold text-white/40 uppercase tracking-widest ml-1">Verify New Passcode</label>
                                     <input required type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} placeholder="VERIFY NEW PASSCODE..." className="w-full bg-white/5 border border-white/10 p-3 rounded-lg text-white text-sm focus:border-cyan-400 outline-none transition-all" />
                                 </div>
                             </div>
