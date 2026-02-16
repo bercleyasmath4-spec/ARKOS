@@ -1,0 +1,7 @@
+{
+  "name": "A.R.K.O.S. Dashboard",
+  "description": "An advanced Jarvis-inspired personal dashboard with glassmorphism, real-time animations, and Gemini-powered voice interaction.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
