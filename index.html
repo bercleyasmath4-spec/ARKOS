@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>A.R.K.O.S. Dashboard</title>
+  <title>Personal Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100;300;400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
@@ -14,22 +14,46 @@
       margin: 0;
       color: white;
       overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
     @keyframes slow-spin {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
     }
+    @keyframes reverse-spin {
+      from { transform: rotate(360deg); }
+      to { transform: rotate(0deg); }
+    }
     .animate-slow-spin {
       animation: slow-spin 10s linear infinite;
     }
+    .animate-reverse-spin {
+      animation: reverse-spin 10s linear infinite;
+    }
     .glass-effect {
-      background: rgba(20, 20, 20, 0.4);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(0, 242, 255, 0.15);
+      background: rgba(15, 15, 15, 0.4);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
     }
     .orb-glow {
-      box-shadow: 0 0 40px 10px rgba(0, 242, 255, 0.3);
+      box-shadow: 0 0 50px 15px rgba(0, 242, 255, 0.25);
+    }
+    /* Smooth custom scrollbar for glassmorphism */
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: rgba(0, 242, 255, 0.1);
+      border-radius: 10px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: rgba(0, 242, 255, 0.3);
     }
   </style>
 <script type="importmap">

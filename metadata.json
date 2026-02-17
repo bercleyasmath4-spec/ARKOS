@@ -1,6 +1,6 @@
 {
-  "name": "A.R.K.O.S. Dashboard",
-  "description": "An advanced Jarvis-inspired personal dashboard with glassmorphism, real-time animations, and Gemini-powered voice interaction.",
+  "name": "Personal Assistant Dashboard",
+  "description": "A clean, modern personal dashboard with real-time notifications and an intelligent voice assistant.",
   "requestFramePermissions": [
     "microphone"
   ]

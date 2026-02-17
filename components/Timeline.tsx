@@ -11,8 +11,8 @@ const Timeline: React.FC<TimelineProps> = ({ items }) => {
   return (
     <div className="mb-8">
       <div className="flex justify-between items-center mb-4">
-        <h2 className="text-[11px] font-bold tracking-widest text-white/50 uppercase">Today's Timeline</h2>
-        <button className="text-xs text-cyan-400 hover:underline">View Calendar</button>
+        <h2 className="text-[11px] font-bold tracking-widest text-white/50 uppercase">Schedule</h2>
+        <button className="text-xs text-cyan-400 hover:underline">Full Calendar</button>
       </div>
       <div className="space-y-3">
         {items.map((item) => (

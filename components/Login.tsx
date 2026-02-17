@@ -50,12 +50,12 @@ export default function Login() {
             <div className="w-full max-w-md px-6 relative z-10 animate-in fade-in zoom-in duration-500">
                 <GlassCard className="p-8 border-cyan-500/20 shadow-2xl shadow-cyan-500/5">
                     <div className="flex flex-col items-center mb-8">
-                        <div className="w-16 h-16 rounded-full bg-cyan-500/10 flex items-center justify-center mb-6 animate-pulse ring-1 ring-cyan-500/30">
+                        <div className="w-16 h-16 rounded-full bg-cyan-500/10 flex items-center justify-center mb-6 ring-1 ring-cyan-500/30">
                             <Fuel size={32} className="text-cyan-400" />
                         </div>
-                        <h1 className="text-2xl font-light text-white tracking-wider">A.R.K.O.S.</h1>
-                        <p className="text-[10px] text-cyan-400/60 font-bold tracking-[0.3em] uppercase mt-2">
-                            {mode === 'signin' ? 'Secure Access Terminal' : mode === 'signup' ? 'New Protocol Initialization' : 'Credentials Recovery'}
+                        <h1 className="text-2xl font-light text-white tracking-wider uppercase">My Assistant</h1>
+                        <p className="text-[10px] text-cyan-400/60 font-bold tracking-[0.2em] uppercase mt-2">
+                            {mode === 'signin' ? 'Secure Login' : mode === 'signup' ? 'Create Your Account' : 'Recover Password'}
                         </p>
                     </div>
                     <form onSubmit={handleAuth} className="space-y-4">
@@ -75,7 +75,7 @@ export default function Login() {
                                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within:text-cyan-400 transition-colors" size={18} />
                                 <input
                                     type="email"
-                                    placeholder="OPERATOR ID (EMAIL)"
+                                    placeholder="EMAIL ADDRESS"
                                     value={email}
                                     onChange={(e) => setEmail(e.target.value)}
                                     required
@@ -87,7 +87,7 @@ export default function Login() {
                                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within:text-cyan-400 transition-colors" size={18} />
                                     <input
                                         type="password"
-                                        placeholder="PASSCODE"
+                                        placeholder="PASSWORD"
                                         value={password}
                                         onChange={(e) => setPassword(e.target.value)}
                                         required
@@ -100,7 +100,7 @@ export default function Login() {
                                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within:text-cyan-400 transition-colors" size={18} />
                                     <input
                                         type="password"
-                                        placeholder="CONFIRM PASSCODE"
+                                        placeholder="CONFIRM PASSWORD"
                                         value={confirmPassword}
                                         onChange={(e) => setConfirmPassword(e.target.value)}
                                         required
@@ -116,7 +116,7 @@ export default function Login() {
                         >
                             {loading ? <Loader2 className="animate-spin" size={18} /> : (
                                 <>
-                                    {mode === 'signup' ? 'INITIALIZE PROTOCOL' : mode === 'reset' ? 'SEND RECOVERY LINK' : 'AUTHENTICATE'}
+                                    {mode === 'signup' ? 'CREATE ACCOUNT' : mode === 'reset' ? 'SEND RESET LINK' : 'SIGN IN'}
                                     {mode === 'reset' ? <RefreshCw size={18} /> : <ArrowRight size={18} />}
                                 </>
                             )}
@@ -125,11 +125,11 @@ export default function Login() {
                     <div className="mt-6 flex flex-col gap-3 text-center">
                         {mode === 'signin' ? (
                             <>
-                                <button onClick={() => setMode('signup')} className="text-xs text-white/40 hover:text-cyan-400 transition-colors uppercase tracking-wider">New User? Initialize Protocol</button>
-                                <button onClick={() => setMode('reset')} className="text-[10px] text-white/20 hover:text-white/60 transition-colors">Forgot Passcode?</button>
+                                <button onClick={() => setMode('signup')} className="text-xs text-white/40 hover:text-cyan-400 transition-colors uppercase tracking-wider">New User? Sign Up Here</button>
+                                <button onClick={() => setMode('reset')} className="text-[10px] text-white/20 hover:text-white/60 transition-colors">Forgot Password?</button>
                             </>
                         ) : (
-                            <button onClick={() => setMode('signin')} className="text-xs text-white/40 hover:text-cyan-400 transition-colors uppercase tracking-wider">Return to Login</button>
+                            <button onClick={() => setMode('signin')} className="text-xs text-white/40 hover:text-cyan-400 transition-colors uppercase tracking-wider">Return to Sign In</button>
                         )}
                     </div>
                 </GlassCard>

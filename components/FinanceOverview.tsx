@@ -11,7 +11,7 @@ const FinanceOverview: React.FC<FinanceOverviewProps> = ({ items }) => {
   return (
     <div className="mb-24">
       <div className="flex justify-between items-center mb-4">
-        <h2 className="text-[11px] font-bold tracking-widest text-white/50 uppercase">Finance Overview</h2>
+        <h2 className="text-[11px] font-bold tracking-widest text-white/50 uppercase">Summary</h2>
         <Icons.BarChart3 className="w-4 h-4 text-cyan-400" />
       </div>
       <div className="grid grid-cols-3 gap-3">

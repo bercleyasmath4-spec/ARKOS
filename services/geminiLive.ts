@@ -4,7 +4,7 @@ import { DashboardState, PriorityLevel, ExpenseCategory, TaskType } from '../typ
 
 export interface VoiceActionCallbacks {
   onMessage?: (text: string) => void;
-  onAddTask?: (title: string, priority: PriorityLevel, target: TaskType) => void;
+  onAddTask?: (title: string, priority: PriorityLevel, target: TaskType, startTime?: string, endTime?: string) => void;
   onAddExpense?: (label: string, amount: number, category: ExpenseCategory) => void;
   onGenerateReport?: () => void;
   onDispatchEmail?: () => void;
@@ -14,18 +14,26 @@ const addTaskTool: FunctionDeclaration = {
   name: 'addTask',
   parameters: {
     type: Type.OBJECT,
-    description: 'Add a new task or protocol to the system.',
+    description: 'Add a new scheduled task to the user\'s list.',
     properties: {
-      title: { type: Type.STRING, description: 'The title or identifier of the task.' },
+      title: { type: Type.STRING, description: 'The name of the task.' },
       priority: { 
         type: Type.STRING, 
-        description: 'Priority level of the task.',
+        description: 'How important the task is.',
         enum: ['Critical', 'Standard', 'Low']
       },
       target: {
         type: Type.STRING,
-        description: 'Whether this is a long-term Main task or a Daily action item.',
+        description: 'Where to put the task (Daily list or General list).',
         enum: ['Main', 'Daily']
+      },
+      startTime: {
+        type: Type.STRING,
+        description: 'The ISO string representing when the task starts.'
+      },
+      endTime: {
+        type: Type.STRING,
+        description: 'The ISO string representing when the task ends.'
       }
     },
     required: ['title', 'priority', 'target'],
@@ -36,7 +44,7 @@ const emailBriefingTool: FunctionDeclaration = {
   name: 'emailBriefing',
   parameters: {
     type: Type.OBJECT,
-    description: 'Email the daily operations briefing to the operator.',
+    description: 'Email a summary of today\'s tasks to the user.',
     properties: {},
   },
 };
@@ -45,7 +53,7 @@ const generateReportTool: FunctionDeclaration = {
   name: 'generateDailyReport',
   parameters: {
     type: Type.OBJECT,
-    description: 'Analyze today\'s achievements and generate a performance report.',
+    description: 'Show a summary report of today\'s progress on screen.',
     properties: {},
   },
 };
@@ -58,6 +66,7 @@ export class GeminiVoiceService {
   private nextStartTime = 0;
   private sources = new Set<AudioBufferSourceNode>();
   private active = false;
+  private stream: MediaStream | null = null;
 
   constructor() {}
 
@@ -65,120 +74,172 @@ export class GeminiVoiceService {
     if (this.active) return;
     this.active = true;
 
-    this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    
-    this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-    this.outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-    
-    if (this.outputAudioContext.state === 'suspended') {
+    try {
+      const apiKey = process.env.API_KEY;
+      if (!apiKey) throw new Error("API Key configuration error.");
+
+      this.ai = new GoogleGenAI({ apiKey });
+      
+      const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
+      if (!AudioContextClass) throw new Error("Your browser does not support audio features.");
+
+      this.inputAudioContext = new AudioContextClass({ sampleRate: 16000 });
+      this.outputAudioContext = new AudioContextClass({ sampleRate: 24000 });
+      
+      await this.inputAudioContext.resume();
       await this.outputAudioContext.resume();
-    }
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-    const dailyTasks = context.tasks.filter(t => t.type === 'Daily');
-    const completedDaily = dailyTasks.filter(t => t.completed).length;
-    
-    const systemInstruction = `You are A.R.K.O.S., Tony Stark's advanced assistant. 
-    Status: ${completedDaily}/${dailyTasks.length} daily objectives secured.
-    Operator Email: ${context.notificationSettings.operatorEmail || 'Unconfigured'}
-    
-    MANDATE:
-    1. For new tasks, call 'addTask'.
-    2. Use 'emailBriefing' if user wants an email summary.
-    3. Use 'generateDailyReport' for an on-screen summary.
-    4. Confirm actions with a professional tone. Brief and sharp.`;
+      const dailyTasks = context.tasks.filter(t => t.type === 'Daily');
+      const completedDaily = dailyTasks.filter(t => t.completed).length;
+      
+      const systemInstruction = `You are a highly intelligent, versatile personal assistant. 
+      
+      CORE MISSION: 
+      1. GENERAL INTELLIGENCE: You are a general-purpose AI. You can discuss any topic—history, science, cooking, coding, or life advice.
+      2. DASHBOARD MANAGEMENT: You manage the user's schedule and budget.
+      
+      NOTIFICATION RULES YOU SHOULD KNOW:
+      If a user asks when they will be reminded:
+      - Low Priority: 24 hours and 1 hour before start.
+      - Standard Priority: 24h, 6h, and 2h before start.
+      - Critical Priority: 24h, 12h, 6h, 2h, and 1h before start.
+      
+      CONTEXT:
+      - The user has ${dailyTasks.length} tasks today, with ${completedDaily} completed.
+      
+      TOOLS:
+      - Use 'addTask' to create tasks.
+      - Use 'emailBriefing' for email summaries.
+      - Use 'generateDailyReport' for on-screen summaries.
+      
+      TONE: Helpful, conversational, and direct. Avoid tech jargon like "protocol" or "telemetry".`;
 
-    this.sessionPromise = this.ai.live.connect({
-      model: 'gemini-2.5-flash-native-audio-preview-12-2025',
-      callbacks: {
-        onopen: () => {
-          if (!this.inputAudioContext) return;
-          const source = this.inputAudioContext.createMediaStreamSource(stream);
-          const scriptProcessor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
-          scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-            if (!this.active) return;
-            const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
-            const pcmBlob = this.createBlob(inputData);
-            this.sessionPromise?.then((session) => {
-              session.sendRealtimeInput({ media: pcmBlob });
-            });
-          };
-          source.connect(scriptProcessor);
-          scriptProcessor.connect(this.inputAudioContext.destination);
-        },
-        onmessage: async (message: LiveServerMessage) => {
-          if (!this.active) return;
-
-          if (message.toolCall) {
-            for (const fc of message.toolCall.functionCalls) {
-              let executionResult = "Action complete.";
-              if (fc.name === 'addTask') {
-                const title = String(fc.args.title || "Untitled Task");
-                const priority = (fc.args.priority as PriorityLevel) || 'Standard';
-                const target = (fc.args.target as TaskType) || 'Daily';
-                callbacks.onAddTask?.(title, priority, target);
-                executionResult = `Task ${title} added.`;
-              } else if (fc.name === 'emailBriefing') {
-                callbacks.onDispatchEmail?.();
-                executionResult = `Email briefing dispatched to your terminal, Sir.`;
-              } else if (fc.name === 'generateDailyReport') {
-                callbacks.onGenerateReport?.();
-                executionResult = `Analyzing achievements...`;
-              }
-              
+      this.sessionPromise = this.ai.live.connect({
+        model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+        callbacks: {
+          onopen: () => {
+            if (!this.inputAudioContext || !this.stream || !this.active) return;
+            const source = this.inputAudioContext.createMediaStreamSource(this.stream);
+            const scriptProcessor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
+            
+            scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+              if (!this.active) return;
+              const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+              const pcmBlob = this.createBlob(inputData);
               this.sessionPromise?.then((session) => {
-                session.sendToolResponse({
-                  functionResponses: { id: fc.id, name: fc.name, response: { result: executionResult } }
-                });
-              });
-            }
-          }
+                session.sendRealtimeInput({ media: pcmBlob });
+              }).catch(() => {});
+            };
 
-          if (message.serverContent?.outputTranscription) {
-            callbacks.onMessage?.(message.serverContent.outputTranscription.text);
-          }
+            source.connect(scriptProcessor);
+            scriptProcessor.connect(this.inputAudioContext.destination);
 
-          if (this.outputAudioContext) {
-            const parts = message.serverContent?.modelTurn?.parts || [];
-            for (const part of parts) {
-              if (part.inlineData?.data) {
-                const base64Audio = part.inlineData.data;
-                this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
-                const audioBuffer = await this.decodeAudioData(this.decode(base64Audio), this.outputAudioContext, 24000, 1);
-                const source = this.outputAudioContext.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(this.outputAudioContext.destination);
-                source.start(this.nextStartTime);
-                this.nextStartTime += audioBuffer.duration;
-                this.sources.add(source);
+            // Trigger an initial greeting from the model
+            this.sessionPromise?.then((session) => {
+              session.sendRealtimeInput([{ text: "Hello! Please provide a brief, friendly greeting to the user and ask how you can help them today." }]);
+            });
+          },
+          onmessage: async (message: LiveServerMessage) => {
+            if (!this.active) return;
+
+            if (message.toolCall) {
+              for (const fc of message.toolCall.functionCalls) {
+                let executionResult = "Done.";
+                if (fc.name === 'addTask') {
+                  const title = String(fc.args.title || "New Task");
+                  const priority = (fc.args.priority as PriorityLevel) || 'Standard';
+                  const target = (fc.args.target as TaskType) || 'Daily';
+                  const start = String(fc.args.startTime || "");
+                  const end = String(fc.args.endTime || "");
+                  callbacks.onAddTask?.(title, priority, target, start, end);
+                  executionResult = `Task added: ${title}.`;
+                } else if (fc.name === 'emailBriefing') {
+                  callbacks.onDispatchEmail?.();
+                  executionResult = `Email sent.`;
+                } else if (fc.name === 'generateDailyReport') {
+                  callbacks.onGenerateReport?.();
+                  executionResult = `Report generated.`;
+                }
+                
+                this.sessionPromise?.then((session) => {
+                  session.sendToolResponse({
+                    functionResponses: { id: fc.id, name: fc.name, response: { result: executionResult } }
+                  });
+                }).catch(() => {});
               }
             }
-          }
+
+            if (message.serverContent?.outputTranscription) {
+              callbacks.onMessage?.(message.serverContent.outputTranscription.text);
+            }
+
+            if (this.outputAudioContext && this.outputAudioContext.state !== 'closed' && this.active) {
+              const parts = message.serverContent?.modelTurn?.parts || [];
+              for (const part of parts) {
+                if (part.inlineData?.data) {
+                  const base64Audio = part.inlineData.data;
+                  this.nextStartTime = Math.max(this.nextStartTime, this.outputAudioContext.currentTime);
+                  try {
+                    const audioBuffer = await this.decodeAudioData(this.decode(base64Audio), this.outputAudioContext, 24000, 1);
+                    const source = this.outputAudioContext.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(this.outputAudioContext.destination);
+                    source.start(this.nextStartTime);
+                    this.nextStartTime += audioBuffer.duration;
+                    this.sources.add(source);
+                    source.onended = () => this.sources.delete(source);
+                  } catch (e) { console.error("Audio playback error", e); }
+                }
+              }
+            }
+          },
+          onerror: (e) => {
+            console.error("Live session error", e);
+            this.stop();
+          },
+          onclose: () => this.stop(),
         },
-        onerror: (e) => this.stop(),
-        onclose: () => this.stop(),
-      },
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
+          },
+          tools: [{ functionDeclarations: [addTaskTool, emailBriefingTool, generateReportTool] }],
+          systemInstruction: systemInstruction,
+          outputAudioTranscription: {},
+          inputAudioTranscription: {},
         },
-        tools: [{ functionDeclarations: [addTaskTool, emailBriefingTool, generateReportTool] }],
-        systemInstruction: systemInstruction,
-        outputAudioTranscription: {},
-        inputAudioTranscription: {},
-      },
-    });
+      });
+    } catch (error: any) {
+      console.error("Voice Service Failure:", error);
+      this.stop();
+      throw error;
+    }
   }
 
   stop() {
     this.active = false;
     this.sources.forEach(s => { try { s.stop(); } catch (e) {} });
     this.sources.clear();
-    this.sessionPromise?.then(session => session.close());
-    this.inputAudioContext?.close();
-    this.outputAudioContext?.close();
+    if (this.sessionPromise) {
+      this.sessionPromise.then(session => { try { session.close(); } catch (e) {} }).catch(() => {});
+      this.sessionPromise = null;
+    }
+    if (this.stream) {
+      this.stream.getTracks().forEach(track => { try { track.stop(); } catch (e) {} });
+      this.stream = null;
+    }
+    if (this.inputAudioContext && this.inputAudioContext.state !== 'closed') {
+      this.inputAudioContext.close().catch(() => {});
+    }
+    this.inputAudioContext = null;
+    if (this.outputAudioContext && this.outputAudioContext.state !== 'closed') {
+      this.outputAudioContext.close().catch(() => {});
+    }
+    this.outputAudioContext = null;
+    this.nextStartTime = 0;
   }
 
   private createBlob(data: Float32Array): Blob {

@@ -23,11 +23,12 @@ export const INITIAL_STATE: DashboardState = {
   tasks: [],
   expenses: [],
   budgetConfig: {
-    limit: 5000
+    limit: 0
   },
   notificationSettings: {
     emailEnabled: false,
     operatorEmail: '',
     alertThresholdHours: 24
-  }
+  },
+  notificationLogs: []
 };

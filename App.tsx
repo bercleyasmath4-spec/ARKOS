@@ -1,15 +1,15 @@
-
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   Settings, X, Plus, Trash2, CheckCircle2, 
-  Circle, AlertTriangle, Briefcase, Activity, Search, Bell, Shield, User, Globe, Smartphone, LogOut, Lock, Loader2, ArrowUpRight, BarChart2, ClipboardList, Copy, Check, Mail, Send
+  Circle, Activity, Search, Bell, Shield, User, LogOut, Lock, Unlock, Loader2, BarChart2, ClipboardList, Mail, Send, DollarSign, CreditCard, TrendingDown, Edit2, Clock, Filter, Check, Cloud, Sparkles
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import { INITIAL_STATE, PRIORITY_COLORS } from './constants.tsx';
-import { DashboardState, Task, Expense, PriorityLevel, ExpenseCategory, TaskType, PerformanceReport, NotificationSettings } from './types.ts';
+import { DashboardState, Task, Expense, PriorityLevel, ExpenseCategory, TaskType, PerformanceReport, NotificationSettings, NotificationLog } from './types.ts';
 import JarvisOrb from './components/JarvisOrb.tsx';
 import NavigationBar, { TabType } from './components/NavigationBar.tsx';
 import GlassCard from './components/GlassCard.tsx';
+import FinanceOverview from './components/FinanceOverview.tsx';
 import { GeminiVoiceService } from './services/geminiLive.ts';
 import { NotificationService } from './services/notificationService.ts';
 import { AuthProvider, useAuth } from './contexts/AuthContext.tsx';
@@ -17,171 +17,257 @@ import Login from './components/Login.tsx';
 import { supabase } from './lib/supabaseClient.ts';
 
 const Dashboard: React.FC = () => {
-    const { user, signOut, needsPasswordReset, setNeedsPasswordReset } = useAuth();
+    const { user, signOut } = useAuth();
     const [activeTab, setActiveTab] = useState<TabType>('home');
     const [taskTab, setTaskTab] = useState<TaskType>('Daily');
     const [showSettings, setShowSettings] = useState(false);
     const [showAddModal, setShowAddModal] = useState<'task' | 'expense' | null>(null);
     const [performanceReport, setPerformanceReport] = useState<PerformanceReport | null>(null);
     const [isGeneratingReport, setIsGeneratingReport] = useState(false);
-    const [isCopied, setIsCopied] = useState(false);
     const [isEmailing, setIsEmailing] = useState(false);
+    const [isTestingEmail, setIsTestingEmail] = useState(false);
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [aiInsight, setAiInsight] = useState<string | null>(null);
+    const [isInsightLoading, setIsInsightLoading] = useState(false);
     
-    // Recovery Passcode Reset
-    const [showPasswordReset, setShowPasswordReset] = useState(false);
-    const [newPassword, setNewPassword] = useState('');
-    const [confirmNewPassword, setConfirmNewPassword] = useState('');
-    
-    // Internal Settings Passcode Change
-    const [settingsOldPassword, setSettingsOldPassword] = useState('');
-    const [settingsNewPassword, setSettingsNewPassword] = useState('');
-    const [settingsConfirmPassword, setSettingsConfirmPassword] = useState('');
-    const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
-    const [passwordUpdateStatus, setPasswordUpdateStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
+    // Filtering State
+    const [priorityFilter, setPriorityFilter] = useState<'All' | PriorityLevel>('All');
+    const [statusFilter, setStatusFilter] = useState<'All' | 'Pending' | 'Completed'>('All');
 
-    const [resetLoading, setResetLoading] = useState(false);
-    const [resetMessage, setResetMessage] = useState<string | null>(null);
+    // Voice & Diagnostic State
     const [isListening, setIsListening] = useState(false);
-    const [voiceText, setVoiceText] = useState('SYSTEM ONLINE');
+
+    // Email Security State
+    const [isEmailLocked, setIsEmailLocked] = useState(true);
+    const [showUnlockModal, setShowUnlockModal] = useState(false);
+    const [unlockPassword, setUnlockPassword] = useState('');
+    const [unlockError, setUnlockError] = useState<string | null>(null);
+    const [tempEmail, setTempEmail] = useState('');
     
-    const [state, setState] = useState<DashboardState>(() => {
-        try {
-            const saved = localStorage.getItem('arkos_db');
-            if (!saved) return INITIAL_STATE;
-            const parsed = JSON.parse(saved);
-            if (!parsed.tasks || !parsed.expenses) return INITIAL_STATE;
-            // Ensure notification settings exist in legacy state
-            if (!parsed.notificationSettings) parsed.notificationSettings = INITIAL_STATE.notificationSettings;
-            return parsed;
-        } catch (e) {
-            console.error("Failed to parse state from localStorage", e);
-            return INITIAL_STATE;
-        }
-    });
+    // Internal state management
+    const [state, setState] = useState<DashboardState>(INITIAL_STATE);
+    const [isLoaded, setIsLoaded] = useState(false);
 
     const voiceService = useRef<GeminiVoiceService | null>(null);
     const notificationService = useRef<NotificationService>(new NotificationService());
 
+    // Initial Load: Local -> Cloud
     useEffect(() => {
-        localStorage.setItem('arkos_db', JSON.stringify(state));
-    }, [state]);
+        const loadPersistence = async () => {
+            if (!user) return;
+            const storageKey = `arkos_db_${user.id}`;
+            const localSaved = localStorage.getItem(storageKey);
+            const cloudSaved = user.user_metadata?.arkos_state;
+            
+            let finalState = INITIAL_STATE;
+            if (cloudSaved) {
+                finalState = cloudSaved;
+            } else if (localSaved) {
+                try {
+                    finalState = JSON.parse(localSaved);
+                } catch (e) {
+                    console.error("Local load failed", e);
+                }
+            }
 
-    // Periodically check for deadlines
+            setState({
+                ...INITIAL_STATE,
+                ...finalState,
+                tasks: Array.isArray(finalState.tasks) ? finalState.tasks : [],
+                expenses: Array.isArray(finalState.expenses) ? finalState.expenses : [],
+                notificationLogs: Array.isArray(finalState.notificationLogs) ? finalState.notificationLogs : []
+            });
+            setIsLoaded(true);
+        };
+        loadPersistence();
+    }, [user]);
+
+    // Debounced Sync to Supabase & LocalStorage
+    useEffect(() => {
+        if (!isLoaded || !user) return;
+
+        const syncData = async () => {
+            setIsSyncing(true);
+            const storageKey = `arkos_db_${user.id}`;
+            localStorage.setItem(storageKey, JSON.stringify(state));
+
+            try {
+                await supabase.auth.updateUser({
+                    data: { arkos_state: state }
+                });
+            } catch (err) {
+                console.error("Cloud sync failed", err);
+            } finally {
+                setTimeout(() => setIsSyncing(false), 800);
+            }
+        };
+
+        const timeout = setTimeout(syncData, 2000);
+        return () => clearTimeout(timeout);
+    }, [state, user, isLoaded]);
+
+    const getAiInsight = async () => {
+        setIsInsightLoading(true);
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        try {
+            const taskData = state.tasks.map(t => `${t.title} (${t.priority}, ${t.completed ? 'Done' : 'Pending'})`).join(', ');
+            const budgetData = `Spent: ${state.expenses.reduce((a, b) => a + b.amount, 0)}, Limit: ${state.budgetConfig.limit}`;
+            
+            const response = await ai.models.generateContent({
+                model: 'gemini-3-flash-lite-preview',
+                contents: `Analyze my current state and give me one helpful sentence of advice. 
+                Tasks: ${taskData}. 
+                Budget: ${budgetData}. 
+                Be friendly and conversational.`
+            });
+            setAiInsight(response.text || "You're doing great! Keep it up.");
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setIsInsightLoading(false);
+        }
+    };
+
+    // Task Filtering Logic
+    const filteredTasks = useMemo(() => {
+        return state.tasks.filter(t => {
+            const matchesType = t.type === taskTab;
+            const matchesPriority = priorityFilter === 'All' || t.priority === priorityFilter;
+            const matchesStatus = statusFilter === 'All' || 
+                (statusFilter === 'Pending' && !t.completed) || 
+                (statusFilter === 'Completed' && t.completed);
+            return matchesType && matchesPriority && matchesStatus;
+        });
+    }, [state.tasks, taskTab, priorityFilter, statusFilter]);
+
+    const nextTask = useMemo(() => {
+        const pending = state.tasks
+            .filter(t => !t.completed)
+            .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+        return pending[0] || null;
+    }, [state.tasks]);
+
+    const formatTimeRange = (start: string, end: string) => {
+        const s = new Date(start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        const e = new Date(end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        return `${s} - ${e}`;
+    };
+
+    const getTimeRemaining = (startTime: string) => {
+        const diff = new Date(startTime).getTime() - new Date().getTime();
+        if (diff < 0) return "Starting Now";
+        const hours = Math.floor(diff / (1000 * 60 * 60));
+        const days = Math.floor(hours / 24);
+        if (days > 0) return `Starts in ${days}d`;
+        if (hours > 0) return `Starts in ${hours}h`;
+        return "Starts soon";
+    };
+
+    useEffect(() => {
+        setTempEmail(state.notificationSettings.operatorEmail || user?.email || '');
+    }, [state.notificationSettings.operatorEmail, user?.email]);
+
     useEffect(() => {
       const interval = setInterval(async () => {
-        const notifiedIds = await notificationService.current.checkDeadlines(state.tasks, state.notificationSettings);
-        if (notifiedIds.length > 0) {
-          setState(prev => ({
-            ...prev,
-            tasks: prev.tasks.map(t => notifiedIds.includes(t.id) ? { ...t, lastNotified: new Date().toISOString() } : t)
-          }));
-          setVoiceText("CRITICAL DISPATCH SENT TO TERMINAL.");
+        if (!isLoaded) return;
+        const { notifiedTasks, logs } = await notificationService.current.checkDeadlines(state.tasks, state.notificationSettings);
+        if (notifiedTasks.length > 0) {
+          setState(prev => {
+            const updatedTasks = prev.tasks.map(t => {
+              const notification = notifiedTasks.find(nt => nt.id === t.id);
+              if (notification) {
+                return { 
+                  ...t, 
+                  lastNotified: new Date().toISOString(),
+                  lastNotifiedMilestone: notification.milestone
+                };
+              }
+              return t;
+            });
+            return {
+              ...prev,
+              notificationLogs: [...logs, ...prev.notificationLogs].slice(0, 50),
+              tasks: updatedTasks
+            } as DashboardState;
+          });
         }
-      }, 1000 * 60 * 5); // Every 5 minutes
+      }, 1000 * 60 * 5); // Check every 5 mins
       return () => clearInterval(interval);
-    }, [state.tasks, state.notificationSettings]);
+    }, [state.tasks, state.notificationSettings, isLoaded]);
 
     useEffect(() => {
         voiceService.current = new GeminiVoiceService();
         return () => voiceService.current?.stop();
     }, []);
 
-    useEffect(() => {
-        if (needsPasswordReset) {
-            setShowPasswordReset(true);
-        }
-    }, [needsPasswordReset]);
-
-    const handlePasswordUpdate = async (e: React.FormEvent) => {
+    const handleUnlockEmail = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (newPassword !== confirmNewPassword) {
-            setResetMessage("Security Error: Passcodes do not match.");
-            return;
-        }
-        setResetLoading(true);
-        setResetMessage(null);
+        setUnlockError(null);
         try {
-            const { error } = await supabase.auth.updateUser({ password: newPassword });
-            if (error) throw error;
-            setResetMessage("Passcode successfully encrypted and stored.");
-            setNeedsPasswordReset(false);
-            setTimeout(() => {
-                setShowPasswordReset(false);
-                setResetMessage(null);
-                setNewPassword('');
-                setConfirmNewPassword('');
-            }, 2000);
-        } catch (error: any) {
-            setResetMessage(`Security Error: ${error.message}`);
-        } finally {
-            setResetLoading(false);
-        }
-    };
-
-    const updateNotificationSettings = (updates: Partial<NotificationSettings>) => {
-      setState(prev => ({
-        ...prev,
-        notificationSettings: { ...prev.notificationSettings, ...updates }
-      }));
-    };
-
-    const handleInternalPasswordChange = async () => {
-        if (!settingsOldPassword || !settingsNewPassword || !settingsConfirmPassword) {
-            setPasswordUpdateStatus({ type: 'error', msg: 'ALL FIELDS REQUIRED' });
-            return;
-        }
-        if (settingsNewPassword !== settingsConfirmPassword) {
-            setPasswordUpdateStatus({ type: 'error', msg: 'NEW PASSCODES DO NOT MATCH' });
-            return;
-        }
-        
-        setIsUpdatingPassword(true);
-        setPasswordUpdateStatus(null);
-        
-        try {
-            const { error: authError } = await supabase.auth.signInWithPassword({
+            const { error } = await supabase.auth.signInWithPassword({
                 email: user?.email || '',
-                password: settingsOldPassword,
+                password: unlockPassword
             });
-
-            if (authError) throw new Error("INVALID CURRENT PASSCODE");
-
-            const { error: updateError } = await supabase.auth.updateUser({ password: settingsNewPassword });
-            if (updateError) throw updateError;
-
-            setPasswordUpdateStatus({ type: 'success', msg: 'PASSCODE UPDATED' });
-            setSettingsOldPassword('');
-            setSettingsNewPassword('');
-            setSettingsConfirmPassword('');
-            setTimeout(() => setPasswordUpdateStatus(null), 3000);
+            if (error) throw new Error("Incorrect password");
+            setIsEmailLocked(false);
+            setShowUnlockModal(false);
+            setUnlockPassword('');
         } catch (err: any) {
-            setPasswordUpdateStatus({ type: 'error', msg: err.message || 'UPDATE FAILED' });
-        } finally {
-            setIsUpdatingPassword(false);
+            setUnlockError(err.message);
         }
     };
 
-    const addTask = useCallback((title: string, priority: PriorityLevel, target: TaskType = 'Daily') => {
+    const saveSettings = () => {
+        setState(prev => ({
+            ...prev,
+            notificationSettings: {
+                ...prev.notificationSettings,
+                operatorEmail: tempEmail
+            }
+        }));
+        setIsEmailLocked(true);
+        setShowSettings(false);
+    };
+
+    const sendTestEmail = async () => {
+        if (!tempEmail) return;
+        setIsTestingEmail(true);
+        try {
+            const body = await notificationService.current.dispatchTestEmail(tempEmail);
+            setState(prev => ({
+                ...prev,
+                notificationLogs: [{
+                    id: Date.now().toString(),
+                    timestamp: new Date().toISOString(),
+                    type: 'Email' as const,
+                    title: 'Test Email',
+                    content: body,
+                    status: 'Dispatched' as const
+                }, ...prev.notificationLogs].slice(0, 50)
+            } as DashboardState));
+        } catch (e) {
+            console.error("Email test failed", e);
+        } finally {
+            setIsTestingEmail(false);
+        }
+    };
+
+    const addTask = useCallback((title: string, priority: PriorityLevel, target: TaskType = 'Daily', startTime: string, endTime: string, isRecurring: boolean = false) => {
+        const now = Date.now();
         const newTask: Task = {
-            id: Date.now().toString(),
+            id: now.toString(),
             title,
-            deadline: 'Today',
+            startTime: startTime || new Date(now).toISOString(),
+            endTime: endTime || new Date(now + 3600000).toISOString(),
             priority,
             completed: false,
-            type: target
+            type: target,
+            recurring: isRecurring,
+            lastNotifiedMilestone: null
         };
         setState(prev => ({ ...prev, tasks: [newTask, ...prev.tasks] }));
         setShowAddModal(null);
     }, []);
-
-    const promoteTask = (taskId: string) => {
-        setState(prev => ({
-            ...prev,
-            tasks: prev.tasks.map(t => 
-                t.id === taskId ? { ...t, type: 'Daily' as TaskType } : t
-            )
-        }));
-    };
 
     const addExpense = useCallback((label: string, amount: number, category: ExpenseCategory) => {
         const newExpense: Expense = {
@@ -189,416 +275,441 @@ const Dashboard: React.FC = () => {
             label,
             amount,
             category,
-            date: new Date().toISOString().split('T')[0]
+            date: new Date().toISOString()
         };
         setState(prev => ({ ...prev, expenses: [newExpense, ...prev.expenses] }));
         setShowAddModal(null);
     }, []);
 
-    const generatePerformanceReport = async () => {
-        setIsGeneratingReport(true);
-        setVoiceText("A.R.K.O.S. ANALYZING PERFORMANCE...");
-        
-        const dailyTasks = state.tasks.filter(t => t.type === 'Daily');
-        const completed = dailyTasks.filter(t => t.completed);
-        const incomplete = dailyTasks.filter(t => !t.completed);
-        
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        try {
-            const response = await ai.models.generateContent({
-                model: 'gemini-3-flash-preview',
-                contents: `A.R.K.O.S. Operations Debrief Request.
-                
-                Format the output as a clean, structured list ready for copy-pasting. 
-                Use bullet points for achievements.
-                Include a "Summary" section, an "Achievement List" section, and a "Remaining Protocols" section.
-                
-                Operational Data:
-                - COMPLETED ACHIEVEMENTS: ${completed.length > 0 ? completed.map(t => t.title).join(', ') : 'None'}
-                - PENDING PROTOCOLS: ${incomplete.length > 0 ? incomplete.map(t => t.title).join(', ') : 'None'}
-                
-                Tone: Tony Stark assistant (professional, witty, efficient). 
-                Keep it concise and sharp.`
-            });
-            
-            const score = dailyTasks.length > 0 ? (completed.length / dailyTasks.length) * 100 : 0;
-            
-            setPerformanceReport({
-                summary: response.text || "Report generation failed.",
-                score: Math.round(score),
-                timestamp: new Date().toLocaleTimeString()
-            });
-            setVoiceText("REPORT GENERATED, SIR.");
-        } catch (err) {
-            console.error(err);
-        } finally {
-            setIsGeneratingReport(false);
-        }
-    };
-
-    const dispatchDailyBriefingEmail = async () => {
-      setIsEmailing(true);
-      setVoiceText("PREPARING BRIEFING DISPATCH...");
-      try {
-        await notificationService.current.emailDailyBriefing(state.tasks, state.notificationSettings.operatorEmail || user?.email || '');
-        setVoiceText("BRIEFING DISPATCHED TO TERMINAL.");
-      } catch (err: any) {
-        setVoiceText(`DISPATCH ERROR: ${err.message}`);
-      } finally {
-        setIsEmailing(false);
-      }
-    };
-
-    const copyReportToClipboard = () => {
-        if (!performanceReport) return;
-        const textToCopy = `A.R.K.O.S. OPERATIONS DEBRIEF\nTimestamp: ${performanceReport.timestamp}\nEfficacy Score: ${performanceReport.score}%\n\n${performanceReport.summary}`;
-        navigator.clipboard.writeText(textToCopy).then(() => {
-            setIsCopied(true);
-            setTimeout(() => setIsCopied(false), 2000);
-        });
-    };
-
     const toggleMic = async () => {
         if (isListening) {
             voiceService.current?.stop();
             setIsListening(false);
-            setVoiceText('AWAITING COMMAND...');
         } else {
             try {
                 setIsListening(true);
-                setVoiceText('A.R.K.O.S. IS LISTENING...');
                 await voiceService.current?.start(state, {
-                    onMessage: (text) => setVoiceText(text),
-                    onAddTask: (title, priority, target) => addTask(title, priority, target),
+                    onAddTask: (title, priority, target, start, end) => addTask(title, priority, target, start || "", end || ""),
                     onAddExpense: (label, amount, category) => addExpense(label, amount, category),
-                    onGenerateReport: () => generatePerformanceReport(),
-                    onDispatchEmail: () => dispatchDailyBriefingEmail()
                 });
-            } catch (err) {
-                console.error(err);
+            } catch (err: any) {
                 setIsListening(false);
-                setVoiceText('INITIALIZATION FAILED');
             }
         }
     };
 
     const totalSpent = state.expenses.reduce((acc, curr) => acc + curr.amount, 0);
-    const isOverBudget = totalSpent > state.budgetConfig.limit;
 
     const renderContent = () => {
         switch (activeTab) {
             case 'search':
                 return (
                     <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                        <h2 className="text-[11px] font-bold tracking-widest text-white/50 uppercase mb-6">System Search</h2>
                         <div className="relative mb-8">
                             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-cyan-400" size={18} />
-                            <input autoFocus type="text" placeholder="Query A.R.K.O.S. database..." className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-white focus:outline-none focus:border-cyan-400 transition-colors" />
+                            <input autoFocus type="text" placeholder="Search tasks..." className="w-full bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-white focus:outline-none focus:border-cyan-400/50 transition-all placeholder:text-white/20" />
                         </div>
-                        <p className="text-xs text-white/30 text-center py-10 italic">No search results found.</p>
                     </section>
                 );
             case 'notifications':
                 return (
                     <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                        <h2 className="text-[11px] font-bold tracking-widest text-white/50 uppercase mb-6">Recent Alerts</h2>
-                        <div className="flex flex-col items-center justify-center py-20 space-y-4">
-                            <div className="p-4 bg-white/5 rounded-full text-white/20"><Bell size={32} /></div>
-                            <p className="text-sm text-white/30 italic">No active notifications.</p>
+                        <div className="flex justify-between items-center mb-6">
+                          <h2 className="text-[11px] font-bold tracking-[0.2em] text-white/40 uppercase">Notifications</h2>
+                          <button onClick={() => setState(s => ({...s, notificationLogs: []}))} className="text-[9px] text-cyan-400/40 hover:text-cyan-400 uppercase font-bold tracking-widest transition-colors">Clear History</button>
+                        </div>
+                        <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                            {state.notificationLogs.length === 0 ? (
+                                <div className="h-40 flex flex-col items-center justify-center border border-dashed border-white/5 rounded-2xl opacity-10">
+                                    <Bell size={24} className="mb-2" />
+                                    <span className="text-[8px] font-bold uppercase tracking-widest">No Recent Alerts</span>
+                                </div>
+                            ) : (
+                                state.notificationLogs.map(log => (
+                                    <GlassCard key={log.id} className="p-4 border-l-2 border-l-cyan-400/50 hover:bg-white/[0.08]">
+                                        <div className="flex justify-between items-start mb-2">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-[10px] font-bold text-white uppercase tracking-widest">{log.title}</span>
+                                            </div>
+                                            <span className="text-[8px] font-mono text-white/30">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                                        </div>
+                                        <div className="text-[9px] leading-relaxed text-white/50 font-mono mt-3 p-3 bg-black/40 rounded-xl border border-white/5 shadow-inner">
+                                            {log.content}
+                                        </div>
+                                    </GlassCard>
+                                ))
+                            )}
                         </div>
                     </section>
                 );
             default:
                 return (
                     <div className="space-y-8 animate-in fade-in duration-700">
-                        {/* Status HUD */}
+                        {/* Info Grid */}
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                            <GlassCard className={`flex flex-col justify-between h-32 ${isOverBudget ? 'border-red-500/50' : ''}`}>
-                                <span className="text-[9px] font-bold text-white/40 tracking-widest uppercase">Budget</span>
-                                <h2 className="text-xl font-bold text-white">${totalSpent.toLocaleString()}</h2>
-                                <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
-                                    <div className={`h-full bg-cyan-400 transition-all`} style={{ width: `${Math.min((totalSpent / state.budgetConfig.limit) * 100, 100)}%` }} />
-                                </div>
+                            <GlassCard className="flex flex-col justify-between h-32 border-cyan-400/10 group">
+                                <span className="text-[9px] font-bold text-white/30 tracking-[0.1em] uppercase">Next Task</span>
+                                {nextTask ? (
+                                    <>
+                                        <h2 className="text-sm font-bold text-white line-clamp-2 leading-tight group-hover:text-cyan-400 transition-colors">{nextTask.title}</h2>
+                                        <div className="flex items-center gap-1.5 text-[10px] text-cyan-400 font-bold uppercase tracking-widest">
+                                            <Clock size={10} />
+                                            {getTimeRemaining(nextTask.startTime)}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <h2 className="text-sm font-bold text-white/20 italic">No Tasks</h2>
+                                        <p className="text-[9px] text-cyan-400/30 font-bold uppercase tracking-widest">Ready to go</p>
+                                    </>
+                                )}
                             </GlassCard>
+
                             <GlassCard className="flex flex-col justify-between h-32">
-                                <span className="text-[9px] font-bold text-white/40 tracking-widest uppercase">Daily Ops</span>
-                                <h2 className="text-xl font-bold text-white">
-                                    {state.tasks.filter(t => t.type === 'Daily' && t.completed).length} / {state.tasks.filter(t => t.type === 'Daily').length}
+                                <span className="text-[9px] font-bold text-white/30 tracking-[0.1em] uppercase">Daily Progress</span>
+                                <h2 className="text-2xl font-bold text-white tabular-nums">
+                                    {state.tasks.filter(t => t.type === 'Daily' && t.completed).length}<span className="text-white/20 mx-1">/</span>{state.tasks.filter(t => t.type === 'Daily').length}
                                 </h2>
-                                <p className="text-[9px] text-cyan-400/60 font-medium">COMPLETED TODAY</p>
+                                <p className="text-[9px] text-cyan-400/40 font-bold uppercase tracking-widest">Completed</p>
                             </GlassCard>
-                            <GlassCard className="hidden md:flex flex-col justify-between h-32">
-                                <span className="text-[9px] font-bold text-white/40 tracking-widest uppercase">Comm Link</span>
-                                <div className="flex items-center gap-2">
-                                  <h2 className="text-xl font-bold text-white">{state.notificationSettings.emailEnabled ? 'ACTIVE' : 'OFFLINE'}</h2>
-                                  <Mail size={16} className={state.notificationSettings.emailEnabled ? 'text-cyan-400' : 'text-white/20'} />
+
+                            <GlassCard className="hidden md:flex flex-col justify-between h-32 border-white/5">
+                                <span className="text-[9px] font-bold text-white/30 tracking-[0.1em] uppercase">Alert Status</span>
+                                <div className="flex items-center gap-3">
+                                  <h2 className="text-xl font-bold text-white tracking-widest">{state.notificationSettings.emailEnabled ? 'ENABLED' : 'DISABLED'}</h2>
+                                  <Shield size={16} className={state.notificationSettings.emailEnabled ? 'text-cyan-400' : 'text-white/10'} />
                                 </div>
-                                <p className="text-[9px] text-cyan-400/60 font-medium uppercase tracking-widest">Email Alerts</p>
+                                <p className="text-[9px] text-cyan-400/40 font-bold uppercase tracking-widest">Email Alerts</p>
                             </GlassCard>
                         </div>
 
-                        {/* Task Matrix Core */}
-                        <section>
-                            <div className="flex justify-between items-center mb-6">
-                                <div className="flex gap-4">
-                                    <button 
-                                        onClick={() => setTaskTab('Daily')}
-                                        className={`text-[11px] font-bold tracking-widest uppercase transition-all ${taskTab === 'Daily' ? 'text-cyan-400 border-b border-cyan-400 pb-1' : 'text-white/30'}`}
-                                    >
-                                        Daily Action Items
-                                    </button>
-                                    <button 
-                                        onClick={() => setTaskTab('Main')}
-                                        className={`text-[11px] font-bold tracking-widest uppercase transition-all ${taskTab === 'Main' ? 'text-cyan-400 border-b border-cyan-400 pb-1' : 'text-white/30'}`}
-                                    >
-                                        Main Strategy
-                                    </button>
+                        {/* Smart Advice Section */}
+                        <GlassCard className="border-cyan-400/20 bg-cyan-400/5">
+                            <div className="flex justify-between items-center mb-3">
+                                <div className="flex items-center gap-2">
+                                    <Sparkles size={16} className="text-cyan-400" />
+                                    <span className="text-[10px] font-bold text-white/60 tracking-widest uppercase">Smart Advice</span>
                                 </div>
-                                <div className="flex gap-2">
-                                    {taskTab === 'Daily' && (
-                                      <>
-                                        <button 
-                                            onClick={dispatchDailyBriefingEmail}
-                                            disabled={isEmailing}
-                                            className="text-cyan-400 p-2 bg-cyan-400/10 rounded-lg hover:bg-cyan-400/20 disabled:opacity-30"
-                                            title="Email full briefing"
-                                        >
-                                            {isEmailing ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-                                        </button>
-                                        <button 
-                                            onClick={generatePerformanceReport}
-                                            disabled={isGeneratingReport}
-                                            className="text-cyan-400 p-2 bg-cyan-400/10 rounded-lg hover:bg-cyan-400/20 disabled:opacity-30"
-                                            title="Generate performance report"
-                                        >
-                                            {isGeneratingReport ? <Loader2 size={16} className="animate-spin" /> : <BarChart2 size={16} />}
-                                        </button>
-                                      </>
-                                    )}
-                                    <button onClick={() => setShowAddModal('task')} className="text-white/50 p-2 bg-white/5 rounded-lg hover:bg-white/10"><Plus size={16} /></button>
+                                <button 
+                                    onClick={getAiInsight} 
+                                    disabled={isInsightLoading}
+                                    className="text-[9px] font-bold text-cyan-400 uppercase tracking-widest hover:text-cyan-300 disabled:opacity-50 transition-colors"
+                                >
+                                    {isInsightLoading ? 'Analyzing...' : 'Refresh'}
+                                </button>
+                            </div>
+                            <p className="text-sm text-white/80 leading-relaxed font-medium min-h-[1.25rem]">
+                                {aiInsight || "Click refresh for personalized insight on your day."}
+                            </p>
+                        </GlassCard>
+
+                        {/* Task Section */}
+                        <section>
+                            <div className="flex flex-col gap-4 mb-6">
+                                <div className="flex justify-between items-center">
+                                    <div className="flex gap-4">
+                                        <button onClick={() => setTaskTab('Daily')} className={`text-[11px] font-bold tracking-widest uppercase transition-all pb-1 border-b ${taskTab === 'Daily' ? 'text-cyan-400 border-cyan-400' : 'text-white/20 border-transparent hover:text-white/40'}`}>Daily</button>
+                                        <button onClick={() => setTaskTab('Main')} className={`text-[11px] font-bold tracking-widest uppercase transition-all pb-1 border-b ${taskTab === 'Main' ? 'text-cyan-400 border-cyan-400' : 'text-white/20 border-transparent hover:text-white/40'}`}>All Tasks</button>
+                                    </div>
+                                    <div className="flex gap-2.5">
+                                        <button onClick={() => setShowAddModal('task')} className="text-cyan-400 p-2.5 bg-cyan-400/5 backdrop-blur-xl border border-cyan-400/20 rounded-xl hover:bg-cyan-400/15 transition-all active:scale-90 shadow-lg"><Plus size={18} /></button>
+                                    </div>
+                                </div>
+
+                                {/* Filter Controls */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-white/[0.03] backdrop-blur-2xl border border-white/10 rounded-2xl">
+                                    <div className="flex flex-col gap-2">
+                                        <span className="text-[7px] font-bold uppercase text-white/30 tracking-widest ml-1">Filter by Priority</span>
+                                        <div className="flex gap-1.5 p-1 bg-black/30 rounded-xl border border-white/5">
+                                            {['All', 'Critical', 'Standard', 'Low'].map(p => (
+                                                <button 
+                                                    key={p} 
+                                                    onClick={() => setPriorityFilter(p as any)}
+                                                    className={`flex-1 px-2 py-1.5 rounded-lg text-[8px] font-bold uppercase transition-all duration-300 border ${priorityFilter === p ? 'bg-cyan-400/10 border-cyan-400/50 text-cyan-400' : 'border-transparent text-white/20 hover:text-white/40'}`}
+                                                >
+                                                    {p}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-col gap-2">
+                                        <span className="text-[7px] font-bold uppercase text-white/30 tracking-widest ml-1">Filter by Status</span>
+                                        <div className="flex gap-1.5 p-1 bg-black/30 rounded-xl border border-white/5">
+                                            {['All', 'Pending', 'Done'].map(s => {
+                                                const val = s === 'Done' ? 'Completed' : s;
+                                                return (
+                                                    <button 
+                                                        key={s} 
+                                                        onClick={() => setStatusFilter(val as any)}
+                                                        className={`flex-1 px-2 py-1.5 rounded-lg text-[8px] font-bold uppercase transition-all duration-300 border ${statusFilter === val ? 'bg-cyan-400/10 border-cyan-400/50 text-cyan-400' : 'border-transparent text-white/20 hover:text-white/40'}`}
+                                                    >
+                                                        {s}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 
-                            <div className="space-y-3">
-                                {state.tasks.filter(t => t.type === taskTab).length === 0 ? (
-                                    <div className="py-12 flex flex-col items-center border border-dashed border-white/10 rounded-2xl">
-                                        <ClipboardList className="text-white/10 mb-3" size={32} />
-                                        <p className="text-xs text-white/20 uppercase tracking-widest">No active protocols in this sector.</p>
+                            <div className="space-y-4">
+                                {filteredTasks.length === 0 ? (
+                                    <div className="py-16 flex flex-col items-center justify-center border border-dashed border-white/5 rounded-3xl opacity-10">
+                                        <ClipboardList size={40} className="mb-3" />
+                                        <p className="text-[9px] uppercase font-bold tracking-widest">No tasks found</p>
                                     </div>
                                 ) : (
-                                    state.tasks.filter(t => t.type === taskTab).map(task => (
-                                        <GlassCard key={task.id} className="group py-4 px-5 flex items-center gap-5">
-                                            <button 
-                                                onClick={() => setState(s => ({ ...s, tasks: s.tasks.map(t => t.id === task.id ? { ...t, completed: !t.completed } : t) }))} 
-                                                className="text-cyan-400/40 hover:text-cyan-400 transition-colors"
-                                            >
-                                                {task.completed ? <CheckCircle2 size={22} className="text-green-400" /> : <Circle size={22} />}
+                                    filteredTasks.map(task => (
+                                        <GlassCard key={task.id} className="group py-5 px-6 flex items-center gap-6 border-white/5 hover:border-cyan-400/20">
+                                            <button onClick={() => setState(s => ({ ...s, tasks: s.tasks.map(t => t.id === task.id ? { ...t, completed: !t.completed, lastCompletedDate: !t.completed ? new Date().toISOString().split('T')[0] : undefined } : t) }))} className="transition-all active:scale-90">
+                                                {task.completed ? <CheckCircle2 size={24} className="text-green-400" /> : <Circle size={24} className="text-white/10 hover:text-cyan-400 transition-colors" />}
                                             </button>
-                                            
                                             <div className="flex-1 min-w-0">
-                                                <h4 className={`text-sm font-semibold tracking-wide transition-all ${task.completed ? 'text-white/20 line-through' : 'text-white'}`}>{task.title}</h4>
-                                                <div className="flex items-center gap-3 mt-1.5">
-                                                    <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded border border-white/10" style={{ color: (PRIORITY_COLORS as any)[task.priority] || '#FFF' }}>{task.priority}</span>
-                                                    {taskTab === 'Main' && <span className="text-[8px] text-white/30 uppercase tracking-widest font-bold">Main Strategy</span>}
+                                                <h4 className={`text-base font-bold tracking-wide transition-all ${task.completed ? 'text-white/10 line-through' : 'text-white'}`}>{task.title}</h4>
+                                                <div className="flex flex-wrap items-center gap-3 mt-2">
+                                                    <span className="text-[8px] font-bold uppercase px-2.5 py-1 rounded-lg border border-white/10 bg-white/5" style={{ color: (PRIORITY_COLORS as any)[task.priority] }}>{task.priority}</span>
+                                                    {task.recurring && <span className="text-[8px] text-green-400/50 uppercase font-mono tracking-widest border border-green-400/10 px-2 py-1 rounded-lg bg-green-400/5">Recurring</span>}
+                                                    <span className="text-[8px] text-white/30 font-mono flex items-center gap-1.5"><Clock size={11} className="text-cyan-400/30" /> {formatTimeRange(task.startTime, task.endTime)}</span>
                                                 </div>
                                             </div>
-
-                                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                                                {taskTab === 'Main' && (
-                                                    <button 
-                                                        onClick={() => promoteTask(task.id)}
-                                                        className="p-1.5 text-cyan-400/50 hover:text-cyan-400 hover:bg-cyan-400/10 rounded"
-                                                        title="Promote to Daily"
-                                                    >
-                                                        <ArrowUpRight size={16} />
-                                                    </button>
-                                                )}
-                                                <button onClick={() => setState(s => ({ ...s, tasks: s.tasks.filter(t => t.id !== task.id) }))} className="p-1.5 text-red-500/40 hover:text-red-500 hover:bg-red-500/10 rounded"><Trash2 size={16} /></button>
-                                            </div>
+                                            <button onClick={() => setState(s => ({ ...s, tasks: s.tasks.filter(t => t.id !== task.id) }))} className="p-2 text-red-500/30 opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500/10 hover:text-red-500 rounded-xl"><Trash2 size={18} /></button>
                                         </GlassCard>
                                     ))
                                 )}
                             </div>
+                        </section>
+
+                        {/* Budget Management */}
+                        <section className="space-y-5">
+                            <div className="flex justify-between items-center px-1">
+                                <h2 className="text-[11px] font-bold tracking-[0.2em] text-white/40 uppercase">Finance Overview</h2>
+                                <button onClick={() => setShowAddModal('expense')} className="text-cyan-400 p-2 bg-cyan-400/5 border border-cyan-400/20 backdrop-blur-xl rounded-xl hover:bg-cyan-400/15 transition-all shadow-md active:scale-90"><Plus size={16} /></button>
+                            </div>
+
+                            <FinanceOverview items={[
+                              { icon: 'DollarSign', label: 'SPENT', val: `$${totalSpent.toLocaleString()}` },
+                              { icon: 'CreditCard', label: 'BUDGET', val: `$${state.budgetConfig.limit.toLocaleString()}` },
+                              { icon: 'TrendingDown', label: 'LEFT', val: `$${Math.max(0, state.budgetConfig.limit - totalSpent).toLocaleString()}` }
+                            ]} />
                         </section>
                     </div>
                 );
         }
     };
 
+    if (!isLoaded) return (
+        <div className="min-h-screen bg-[#050505] flex flex-col items-center justify-center">
+            <Loader2 className="animate-spin text-cyan-400 mb-6" size={48} />
+            <div className="text-[10px] tracking-[0.4em] font-bold text-white/20 animate-pulse uppercase">Loading your dashboard...</div>
+        </div>
+    );
+
     return (
         <div className="min-h-screen relative pb-32">
             <div className="fixed top-0 left-0 w-full h-full bg-[#050505] -z-10" />
-            <div className="fixed top-[-100px] left-[-50px] w-[300px] h-[300px] bg-cyan-400 opacity-[0.08] blur-[100px] pointer-events-none" />
-            <div className="fixed bottom-0 right-[-50px] w-[300px] h-[300px] bg-cyan-400 opacity-[0.05] blur-[100px] pointer-events-none" />
-
-            {/* Performance Report Modal */}
-            {performanceReport && (
-                <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-black/90 backdrop-blur-xl animate-in fade-in duration-300">
-                    <GlassCard className="w-full max-w-lg p-8 border-cyan-400 shadow-[0_0_100px_rgba(0,242,255,0.1)] overflow-hidden flex flex-col max-h-[85vh]">
-                        <div className="flex justify-between items-center mb-6 shrink-0">
-                            <div className="flex items-center gap-3">
-                                <BarChart2 className="text-cyan-400" size={24} />
-                                <h2 className="text-lg font-bold text-white tracking-[0.2em] uppercase">Operations Debrief</h2>
-                            </div>
-                            <div className="flex items-center gap-3">
-                                <button 
-                                    onClick={copyReportToClipboard}
-                                    className="flex items-center gap-2 px-3 py-1.5 bg-cyan-400/10 border border-cyan-400/30 rounded-lg text-cyan-400 text-[10px] font-bold uppercase tracking-widest hover:bg-cyan-400/20 transition-all"
-                                >
-                                    {isCopied ? <Check size={14} /> : <Copy size={14} />}
-                                    {isCopied ? 'COPIED TO HUD' : 'COPY DEBRIEF'}
-                                </button>
-                                <button onClick={() => setPerformanceReport(null)} className="text-white/30 hover:text-white p-1"><X size={20} /></button>
-                            </div>
-                        </div>
-                        
-                        <div className="overflow-y-auto pr-2 custom-scrollbar">
-                            <div className="space-y-6">
-                                <div className="p-4 bg-white/5 rounded-2xl border border-white/10">
-                                    <div className="flex justify-between items-end mb-2">
-                                        <span className="text-[10px] font-bold text-white/40 uppercase">Efficacy Score</span>
-                                        <span className="text-2xl font-black text-cyan-400">{performanceReport.score}%</span>
-                                    </div>
-                                    <div className="h-2 w-full bg-black rounded-full overflow-hidden">
-                                        <div className="h-full bg-cyan-400" style={{ width: `${performanceReport.score}%` }} />
-                                    </div>
-                                </div>
-                                
-                                <div className="relative p-6 bg-black/40 border border-white/5 rounded-2xl font-mono">
-                                    <div className="absolute top-2 right-4 text-[8px] text-white/10 font-bold tracking-widest uppercase">STARK-OS ENCRYPTION ACTIVE</div>
-                                    <pre className="text-xs leading-relaxed text-white/80 whitespace-pre-wrap font-sans">
-                                        {performanceReport.summary}
-                                    </pre>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="flex justify-between items-center pt-4 border-t border-white/5 shrink-0 mt-4">
-                            <span className="text-[9px] font-bold text-white/20 uppercase tracking-widest">{performanceReport.timestamp}</span>
-                            <span className="text-[9px] font-bold text-cyan-400/60 uppercase tracking-widest">A.R.K.O.S. Security Signature</span>
-                        </div>
-                    </GlassCard>
-                </div>
+            
+            {/* Unlock Password Modal */}
+            {showUnlockModal && (
+              <div className="fixed inset-0 z-[300] flex items-center justify-center p-6 bg-black/95 backdrop-blur-3xl animate-in fade-in duration-500">
+                <GlassCard className="w-full max-sm p-10 border-cyan-500/40">
+                  <div className="flex flex-col items-center mb-8">
+                    <Shield className="text-cyan-400 mb-6" size={40} />
+                    <h2 className="text-xl font-bold text-white uppercase tracking-widest">Security Check</h2>
+                    <p className="text-[10px] text-white/30 uppercase mt-3 tracking-widest">Verify password to edit settings</p>
+                  </div>
+                  <form onSubmit={handleUnlockEmail} className="space-y-5">
+                    <input autoFocus type="password" value={unlockPassword} onChange={(e) => setUnlockPassword(e.target.value)} placeholder="ENTER PASSWORD..." className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-5 rounded-2xl text-white text-sm outline-none focus:border-cyan-400/50 transition-all" />
+                    {unlockError && <p className="text-[10px] text-red-500 font-bold uppercase text-center">{unlockError}</p>}
+                    <div className="flex gap-4 pt-2">
+                      <button type="button" onClick={() => setShowUnlockModal(false)} className="flex-1 py-4 text-white/30 text-[10px] font-bold uppercase tracking-widest hover:text-white">Cancel</button>
+                      <button type="submit" className="flex-1 py-4 bg-cyan-400 text-black text-[10px] font-bold rounded-2xl uppercase tracking-widest shadow-lg hover:bg-cyan-300">Verify</button>
+                    </div>
+                  </form>
+                </GlassCard>
+              </div>
             )}
 
             {showSettings && (
-                <div className="fixed inset-0 z-[120] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
-                    <GlassCard className="w-full max-w-md p-8 relative max-h-[90vh] overflow-y-auto border-cyan-400/30">
-                        <button onClick={() => {
-                            setShowSettings(false);
-                            setPasswordUpdateStatus(null);
-                            setSettingsOldPassword('');
-                        }} className="absolute top-4 right-4 text-white/40 hover:text-white"><X size={24} /></button>
+                <div className="fixed inset-0 z-[120] flex items-center justify-center p-6 bg-black/80 backdrop-blur-2xl animate-in fade-in duration-500">
+                    <GlassCard className="w-full max-lg p-10 relative max-h-[90vh] overflow-y-auto border-cyan-400/20 shadow-2xl">
+                        <button onClick={() => setShowSettings(false)} className="absolute top-6 right-6 text-white/20 hover:text-white transition-all"><X size={28} /></button>
+                        <h2 className="text-2xl font-bold text-white mb-10 uppercase tracking-widest">Settings</h2>
                         
-                        <h2 className="text-xl font-bold text-white mb-6 uppercase tracking-wider">System Configuration</h2>
-                        
-                        {/* Notification Management */}
-                        <div className="mb-8 space-y-4">
-                          <div className="flex items-center gap-2 mb-2">
-                            <Bell size={16} className="text-cyan-400" />
-                            <h3 className="text-xs font-bold text-white/40 uppercase tracking-widest">Comm-Link Protocols</h3>
-                          </div>
-                          
-                          <div className="p-4 bg-white/5 border border-white/10 rounded-2xl space-y-4">
-                            <div className="flex justify-between items-center">
-                              <div className="flex flex-col">
-                                <span className="text-sm text-white font-medium">Email Alerts</span>
-                                <span className="text-[10px] text-white/40">Critical deadline notifications</span>
-                              </div>
-                              <button 
-                                onClick={() => updateNotificationSettings({ emailEnabled: !state.notificationSettings.emailEnabled })}
-                                className={`w-12 h-6 rounded-full transition-all relative ${state.notificationSettings.emailEnabled ? 'bg-cyan-400' : 'bg-white/10'}`}
-                              >
-                                <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${state.notificationSettings.emailEnabled ? 'left-7' : 'left-1'}`} />
-                              </button>
-                            </div>
-
-                            <div className="space-y-1">
-                                <label className="text-[8px] font-bold text-white/40 uppercase tracking-widest ml-1">Primary Operator Email</label>
-                                <div className="relative">
-                                  <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
-                                  <input 
-                                      type="email"
-                                      value={state.notificationSettings.operatorEmail}
-                                      onChange={(e) => updateNotificationSettings({ operatorEmail: e.target.value })}
-                                      placeholder="ENTER ADDRESS..."
-                                      className="w-full bg-black/40 border border-white/10 p-3 pl-9 rounded-xl text-white text-xs focus:border-cyan-400 outline-none transition-all"
-                                  />
+                        <div className="space-y-8 mb-10">
+                            <div className="p-6 bg-white/[0.03] backdrop-blur-3xl border border-white/10 rounded-3xl space-y-6">
+                                <div className="flex justify-between items-center">
+                                  <div className="flex flex-col">
+                                    <span className="text-[11px] text-white font-bold uppercase tracking-widest">Email Notifications</span>
+                                    <span className="text-[8px] text-white/30 uppercase tracking-widest mt-1">Get alerts for upcoming tasks</span>
+                                  </div>
+                                  <button onClick={() => setState(prev => ({ ...prev, notificationSettings: { ...prev.notificationSettings, emailEnabled: !prev.notificationSettings.emailEnabled } }))} className={`w-12 h-6 rounded-full transition-all relative p-1 ${state.notificationSettings.emailEnabled ? 'bg-cyan-400' : 'bg-white/10'}`}>
+                                    <div className={`w-4 h-4 rounded-full bg-white transition-all shadow-md ${state.notificationSettings.emailEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                                  </button>
+                                </div>
+                                <div className="space-y-3">
+                                    <label className="text-[8px] font-bold text-white/30 uppercase tracking-widest flex items-center justify-between ml-1">
+                                        Email Address
+                                        <div className="flex items-center gap-1.5">
+                                            {isEmailLocked ? <Lock size={9} className="text-white/20" /> : <Unlock size={9} className="text-cyan-400" />}
+                                        </div>
+                                    </label>
+                                    <div className="flex gap-3">
+                                        <input 
+                                            disabled={isEmailLocked} 
+                                            type="email" 
+                                            value={tempEmail} 
+                                            onChange={(e) => setTempEmail(e.target.value)} 
+                                            placeholder="ENTER EMAIL ADDRESS..." 
+                                            className={`flex-1 bg-black/40 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-xs outline-none transition-all placeholder:text-white/10 ${isEmailLocked ? 'opacity-40' : 'focus:border-cyan-400/50'}`} 
+                                        />
+                                        {isEmailLocked ? (
+                                            <button onClick={() => setShowUnlockModal(true)} className="px-5 py-2 bg-white/5 border border-white/10 rounded-2xl text-[9px] font-bold uppercase tracking-widest hover:bg-white/10 text-cyan-400 transition-all">Unlock</button>
+                                        ) : (
+                                            <button onClick={sendTestEmail} disabled={isTestingEmail} className="px-5 py-2 bg-cyan-400/10 text-cyan-400 border border-cyan-400/30 rounded-2xl text-[9px] font-bold uppercase tracking-widest hover:bg-cyan-400/20 disabled:opacity-50 transition-all">
+                                                {isTestingEmail ? <Loader2 className="animate-spin" size={14} /> : 'Test'}
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
-                          </div>
+
+                            <div className="p-6 bg-white/[0.03] backdrop-blur-3xl border border-white/10 rounded-3xl space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-[8px] font-bold text-white/30 uppercase tracking-widest ml-1">Monthly Budget ($)</label>
+                                    <input type="number" value={state.budgetConfig.limit} onChange={(e) => setState(prev => ({ ...prev, budgetConfig: { limit: parseInt(e.target.value) || 0 } }))} className="w-full bg-black/40 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-xs focus:border-cyan-400/50 outline-none transition-all tabular-nums" />
+                                </div>
+                            </div>
                         </div>
 
-                        <div className="space-y-3">
-                            <button onClick={signOut} className="w-full py-4 bg-white/5 border border-white/10 rounded-xl text-white/70 font-bold text-sm tracking-widest uppercase hover:bg-white/10 transition-all flex items-center justify-center gap-2">
-                                <LogOut size={16} /> Disconnect
-                            </button>
-                            <button onClick={() => { localStorage.removeItem('arkos_db'); window.location.reload(); }} className="w-full py-4 bg-red-500/20 border border-red-500/50 rounded-xl text-red-500 font-bold text-sm tracking-widest uppercase hover:bg-red-500/30 transition-all">Clear Database</button>
+                        <div className="grid grid-cols-2 gap-4">
+                            <button onClick={saveSettings} className="py-5 bg-cyan-400 text-black font-bold text-xs tracking-widest uppercase rounded-2xl flex items-center justify-center gap-3 hover:bg-cyan-300 transition-all active:scale-95"><Check size={18} /> Save Changes</button>
+                            <button onClick={signOut} className="py-5 bg-white/5 border border-white/10 rounded-2xl text-white/40 font-bold text-xs tracking-widest uppercase hover:text-red-500 transition-all flex items-center justify-center gap-3"><LogOut size={18} /> Sign Out</button>
                         </div>
                     </GlassCard>
                 </div>
             )}
 
             {showAddModal && (
-                <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-black/90 backdrop-blur-md animate-in zoom-in duration-300">
-                    <GlassCard className="w-full max-sm p-8 border-cyan-400/40">
-                        <h2 className="text-lg font-bold text-white mb-6 uppercase tracking-widest">New {showAddModal === 'task' ? 'Protocol' : 'Transaction'}</h2>
-                        <form onSubmit={(e) => {
-                            e.preventDefault();
-                            const formData = new FormData(e.currentTarget);
-                            if (showAddModal === 'task') addTask(formData.get('title') as string, formData.get('priority') as PriorityLevel, formData.get('target') as TaskType);
-                            else addExpense(formData.get('label') as string, Number(formData.get('amount')), formData.get('category') as ExpenseCategory);
-                        }} className="space-y-4">
-                            <input required name={showAddModal === 'task' ? 'title' : 'label'} placeholder="IDENTIFIER..." className="w-full bg-white/5 border border-white/10 p-4 rounded-xl text-white text-sm focus:border-cyan-400 outline-none" />
-                            {showAddModal === 'task' ? (
-                                <>
-                                    <div className="flex gap-2">
-                                        <select name="priority" className="flex-1 bg-white/5 border border-white/10 p-3 rounded-xl text-white text-sm outline-none">
-                                            <option value="Critical">CRITICAL</option>
-                                            <option value="Standard">STANDARD</option>
-                                            <option value="Low">LOW</option>
-                                        </select>
-                                        <select name="target" className="flex-1 bg-white/5 border border-white/10 p-3 rounded-xl text-white text-sm outline-none">
-                                            <option value="Daily">DAILY ACTION</option>
-                                            <option value="Main">MAIN STRATEGY</option>
-                                        </select>
+                <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-black/95 backdrop-blur-3xl animate-in zoom-in-95 duration-300">
+                    <GlassCard className="w-full max-sm p-10 border-cyan-400/30">
+                        <h2 className="text-xl font-bold text-white mb-8 uppercase tracking-widest">{showAddModal === 'task' ? 'Add Task' : 'Add Expense'}</h2>
+                        
+                        {showAddModal === 'task' ? (
+                            <form onSubmit={(e) => {
+                                e.preventDefault();
+                                const formData = new FormData(e.currentTarget);
+                                addTask(
+                                    formData.get('title') as string, 
+                                    formData.get('priority') as PriorityLevel, 
+                                    formData.get('target') as TaskType, 
+                                    formData.get('startTime') as string,
+                                    formData.get('endTime') as string,
+                                    formData.get('recurring') === 'on'
+                                );
+                            }} className="space-y-6">
+                                <div className="space-y-2">
+                                    <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Task Name</label>
+                                    <input required name="title" placeholder="ENTER TASK TITLE..." className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-sm focus:border-cyan-400/50 outline-none transition-all font-bold" />
+                                </div>
+                                
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Priority</label>
+                                        <div className="relative">
+                                            <select name="priority" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] font-bold uppercase outline-none appearance-none hover:border-white/20 transition-all">
+                                                <option value="Critical" className="bg-[#050505]">CRITICAL</option>
+                                                <option value="Standard" className="bg-[#050505]">STANDARD</option>
+                                                <option value="Low" className="bg-[#050505]">LOW</option>
+                                            </select>
+                                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400/40 text-[8px]">▼</div>
+                                        </div>
                                     </div>
-                                </>
-                            ) : (
-                                <>
-                                    <input required type="number" name="amount" placeholder="VALUE..." className="w-full bg-white/5 border border-white/10 p-3 rounded-xl text-white text-sm focus:border-cyan-400 outline-none" />
-                                    <select name="category" className="w-full bg-white/5 border border-white/10 p-3 rounded-xl text-white text-sm outline-none">
-                                        <option value="Food">FOOD</option>
-                                        <option value="Rent">RENT</option>
-                                        <option value="Travel">TRAVEL</option>
-                                        <option value="Tech">TECH</option>
-                                        <option value="Health">HEALTH</option>
-                                        <option value="Other">OTHER</option>
-                                    </select>
-                                </>
-                            )}
-                            <div className="flex gap-3 pt-4">
-                                <button type="button" onClick={() => setShowAddModal(null)} className="flex-1 py-3 text-white/40 font-bold text-xs">CANCEL</button>
-                                <button type="submit" className="flex-1 py-3 bg-cyan-400 text-black font-extrabold text-xs rounded-xl shadow-lg shadow-cyan-400/20">CONFIRM</button>
-                            </div>
-                        </form>
+                                    <div className="space-y-2">
+                                        <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Category</label>
+                                        <div className="relative">
+                                            <select name="target" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] font-bold uppercase outline-none appearance-none hover:border-white/20 transition-all">
+                                                <option value="Daily" className="bg-[#050505]">DAILY</option>
+                                                <option value="Main" className="bg-[#050505]">TASKS</option>
+                                            </select>
+                                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400/40 text-[8px]">▼</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <label className="text-[7px] font-bold text-cyan-400/60 uppercase tracking-widest ml-1">Start Time</label>
+                                        <input required name="startTime" type="datetime-local" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] focus:border-cyan-400/50 outline-none transition-all" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-[7px] font-bold text-red-400/60 uppercase tracking-widest ml-1">End Time</label>
+                                        <input required name="endTime" type="datetime-local" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] focus:border-cyan-400/50 outline-none transition-all" />
+                                    </div>
+                                </div>
+
+                                <label className="flex items-center gap-3 px-2 group cursor-pointer py-2">
+                                    <input name="recurring" type="checkbox" className="w-5 h-5 rounded-lg bg-white/5 border-white/20 text-cyan-400 focus:ring-cyan-400/20" />
+                                    <span className="text-[9px] text-white/30 group-hover:text-white/70 font-bold uppercase tracking-widest">Repeat Daily</span>
+                                </label>
+
+                                <div className="flex gap-4 pt-6 border-t border-white/5">
+                                    <button type="button" onClick={() => setShowAddModal(null)} className="flex-1 py-4 text-white/20 text-[10px] font-bold uppercase tracking-widest hover:text-white">Cancel</button>
+                                    <button type="submit" className="flex-1 py-4 bg-cyan-400 text-black font-bold text-[10px] rounded-2xl uppercase tracking-widest shadow-lg hover:bg-cyan-300 transition-all">Add Task</button>
+                                </div>
+                            </form>
+                        ) : (
+                            <form onSubmit={(e) => {
+                                e.preventDefault();
+                                const formData = new FormData(e.currentTarget);
+                                addExpense(formData.get('label') as string, parseFloat(formData.get('amount') as string) || 0, formData.get('category') as ExpenseCategory);
+                            }} className="space-y-6">
+                                <div className="space-y-2">
+                                    <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Description</label>
+                                    <input required name="label" placeholder="ENTER EXPENSE NAME..." className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-sm focus:border-cyan-400/50 outline-none transition-all font-bold" />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Amount ($)</label>
+                                        <input required type="number" step="0.01" name="amount" placeholder="0.00" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-sm focus:border-cyan-400/50 outline-none transition-all font-mono" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Type</label>
+                                        <div className="relative">
+                                            <select name="category" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] font-bold uppercase outline-none appearance-none hover:border-white/20 transition-all">
+                                                <option value="Other" className="bg-[#050505]">OTHER</option>
+                                                <option value="Food" className="bg-[#050505]">FOOD</option>
+                                                <option value="Rent" className="bg-[#050505]">RENT</option>
+                                                <option value="Travel" className="bg-[#050505]">TRAVEL</option>
+                                                <option value="Health" className="bg-[#050505]">HEALTH</option>
+                                                <option value="Tech" className="bg-[#050505]">TECH</option>
+                                            </select>
+                                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400/40 text-[8px]">▼</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="flex gap-4 pt-6 border-t border-white/5">
+                                    <button type="button" onClick={() => setShowAddModal(null)} className="flex-1 py-4 text-white/20 text-[10px] font-bold uppercase tracking-widest hover:text-white">Cancel</button>
+                                    <button type="submit" className="flex-1 py-4 bg-cyan-400 text-black font-bold text-[10px] rounded-2xl uppercase tracking-widest shadow-lg hover:bg-cyan-300 transition-all">Add Expense</button>
+                                </div>
+                            </form>
+                        )}
                     </GlassCard>
                 </div>
             )}
 
             <main className="max-w-2xl mx-auto px-6 pt-10">
-                <header className="flex justify-between items-start mb-10">
-                    <div>
-                        <div className="text-[10px] font-extrabold tracking-[0.2em] text-cyan-400 mb-1 uppercase">Operational HUD Online</div>
-                        <h1 className="text-3xl font-light text-white">System <span className="font-bold">Active.</span></h1>
-                        <p className="text-sm text-white/40 mt-1">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
+                <header className="flex justify-between items-start mb-12">
+                    <div className="animate-in fade-in slide-in-from-left duration-700">
+                        <h1 className="text-3xl font-extralight text-white leading-tight">Welcome back.</h1>
                     </div>
-                    <button onClick={() => setShowSettings(true)} className="w-11 h-11 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-cyan-400 hover:border-cyan-400 transition-colors"><Settings size={20} /></button>
+                    <button onClick={() => setShowSettings(true)} className="w-12 h-12 rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10 flex items-center justify-center text-cyan-400 hover:text-cyan-300 hover:border-cyan-400/50 transition-all shadow-xl active:scale-90">
+                        <Settings size={22} />
+                    </button>
                 </header>
 
-                <section className="flex flex-col items-center justify-center h-48 mb-10">
+                <section className="flex flex-col items-center justify-center h-56 mb-12 relative">
+                    <div className="absolute inset-0 bg-cyan-400/5 blur-[120px] rounded-full pointer-events-none animate-pulse"></div>
                     <JarvisOrb isListening={isListening} />
-                    <div className="mt-8 text-[9px] tracking-[0.3em] font-bold text-cyan-400 uppercase text-center max-w-[80%] line-clamp-2 min-h-[24px]">{voiceText}</div>
                 </section>
                 {renderContent()}
             </main>
@@ -611,11 +722,9 @@ const Dashboard: React.FC = () => {
 const AppContent: React.FC = () => {
     const { user, loading } = useAuth();
     if (loading) return (
-        <div className="min-h-screen bg-[#050505] flex items-center justify-center">
-            <div className="flex flex-col items-center gap-4">
-                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-cyan-400"></div>
-                <p className="text-cyan-400/40 text-[10px] font-bold tracking-[0.2em] uppercase">Syncing with Central Core...</p>
-            </div>
+        <div className="min-h-screen bg-[#050505] flex flex-col items-center justify-center">
+            <Loader2 className="animate-spin text-cyan-400 mb-6" size={48} />
+            <div className="text-cyan-400 font-mono text-[10px] tracking-[0.5em] animate-pulse uppercase">Synchronizing Account...</div>
         </div>
     );
     return user ? <Dashboard /> : <Login />;

@@ -6,11 +6,16 @@ export type TaskType = 'Main' | 'Daily';
 export interface Task {
   id: string;
   title: string;
-  deadline: string; // ISO string or human readable
+  startTime: string; // ISO string 
+  endTime: string;   // ISO string
   priority: PriorityLevel;
   completed: boolean;
   type: TaskType;
-  lastNotified?: string; // ISO string to prevent double emails
+  lastNotified?: string; // ISO string to prevent double emails (legacy/fallback)
+  lastNotifiedMilestone?: number | null; // Tracks the specific hour milestone triggered (e.g. 24, 12, 1)
+  notes?: string;           // Tactical notes
+  recurring?: boolean;      // Recurring flag
+  lastCompletedDate?: string; // Tracking for daily reset
 }
 
 export interface Expense {
@@ -31,11 +36,21 @@ export interface NotificationSettings {
   alertThresholdHours: number;
 }
 
+export interface NotificationLog {
+  id: string;
+  timestamp: string;
+  type: 'Email' | 'System';
+  title: string;
+  content: string;
+  status: 'Dispatched' | 'Failed';
+}
+
 export interface DashboardState {
   tasks: Task[];
   expenses: Expense[];
   budgetConfig: BudgetConfig;
   notificationSettings: NotificationSettings;
+  notificationLogs: NotificationLog[];
 }
 
 export interface PerformanceReport {
