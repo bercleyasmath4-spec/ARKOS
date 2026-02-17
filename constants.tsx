@@ -24,5 +24,10 @@ export const INITIAL_STATE: DashboardState = {
   expenses: [],
   budgetConfig: {
     limit: 5000
+  },
+  notificationSettings: {
+    emailEnabled: false,
+    operatorEmail: '',
+    alertThresholdHours: 24
   }
 };

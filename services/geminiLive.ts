@@ -1,11 +1,13 @@
 
 import { GoogleGenAI, LiveServerMessage, Modality, Blob, Type, FunctionDeclaration } from '@google/genai';
-import { DashboardState, PriorityLevel, ExpenseCategory } from '../types';
+import { DashboardState, PriorityLevel, ExpenseCategory, TaskType } from '../types';
 
 export interface VoiceActionCallbacks {
   onMessage?: (text: string) => void;
-  onAddTask?: (title: string, priority: PriorityLevel) => void;
+  onAddTask?: (title: string, priority: PriorityLevel, target: TaskType) => void;
   onAddExpense?: (label: string, amount: number, category: ExpenseCategory) => void;
+  onGenerateReport?: () => void;
+  onDispatchEmail?: () => void;
 }
 
 const addTaskTool: FunctionDeclaration = {
@@ -20,26 +22,31 @@ const addTaskTool: FunctionDeclaration = {
         description: 'Priority level of the task.',
         enum: ['Critical', 'Standard', 'Low']
       },
+      target: {
+        type: Type.STRING,
+        description: 'Whether this is a long-term Main task or a Daily action item.',
+        enum: ['Main', 'Daily']
+      }
     },
-    required: ['title', 'priority'],
+    required: ['title', 'priority', 'target'],
   },
 };
 
-const addExpenseTool: FunctionDeclaration = {
-  name: 'addExpense',
+const emailBriefingTool: FunctionDeclaration = {
+  name: 'emailBriefing',
   parameters: {
     type: Type.OBJECT,
-    description: 'Record a new financial transaction or expense.',
-    properties: {
-      label: { type: Type.STRING, description: 'What the expense was for.' },
-      amount: { type: Type.NUMBER, description: 'The cost/value of the transaction.' },
-      category: { 
-        type: Type.STRING, 
-        description: 'The category of the expense.',
-        enum: ['Food', 'Rent', 'Travel', 'Health', 'Tech', 'Other']
-      },
-    },
-    required: ['label', 'amount', 'category'],
+    description: 'Email the daily operations briefing to the operator.',
+    properties: {},
+  },
+};
+
+const generateReportTool: FunctionDeclaration = {
+  name: 'generateDailyReport',
+  parameters: {
+    type: Type.OBJECT,
+    description: 'Analyze today\'s achievements and generate a performance report.',
+    properties: {},
   },
 };
 
@@ -63,26 +70,24 @@ export class GeminiVoiceService {
     this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
     this.outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     
-    // Ensure context is running (fixes silent starts)
     if (this.outputAudioContext.state === 'suspended') {
       await this.outputAudioContext.resume();
     }
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-    const totalSpent = context.expenses.reduce((acc, curr) => acc + curr.amount, 0);
-    const pendingTasks = context.tasks.filter(t => !t.completed).length;
+    const dailyTasks = context.tasks.filter(t => t.type === 'Daily');
+    const completedDaily = dailyTasks.filter(t => t.completed).length;
     
     const systemInstruction = `You are A.R.K.O.S., Tony Stark's advanced assistant. 
-    Current System Load: ${pendingTasks} pending protocols.
-    Current Financial Burn: $${totalSpent} out of $${context.budgetConfig.limit}.
+    Status: ${completedDaily}/${dailyTasks.length} daily objectives secured.
+    Operator Email: ${context.notificationSettings.operatorEmail || 'Unconfigured'}
     
-    Your MANDATE:
-    1. If the user mentions a new task, tasking, or protocol, IMMEDIATELY call 'addTask'.
-    2. If the user mentions a purchase, cost, or expense, IMMEDIATELY call 'addExpense'.
-    3. You MUST always confirm actions verbally with a professional, slightly witty tone.
-    4. Keep spoken responses concise.
-    Always use tools for data modification. After tool calls, verify the result to the user.`;
+    MANDATE:
+    1. For new tasks, call 'addTask'.
+    2. Use 'emailBriefing' if user wants an email summary.
+    3. Use 'generateDailyReport' for an on-screen summary.
+    4. Confirm actions with a professional tone. Brief and sharp.`;
 
     this.sessionPromise = this.ai.live.connect({
       model: 'gemini-2.5-flash-native-audio-preview-12-2025',
@@ -111,23 +116,20 @@ export class GeminiVoiceService {
               if (fc.name === 'addTask') {
                 const title = String(fc.args.title || "Untitled Task");
                 const priority = (fc.args.priority as PriorityLevel) || 'Standard';
-                callbacks.onAddTask?.(title, priority);
-                executionResult = `Protocol ${title} initialized at ${priority} priority level.`;
-              } else if (fc.name === 'addExpense') {
-                const label = String(fc.args.label || "Miscellaneous");
-                const amount = Number(fc.args.amount) || 0;
-                const category = (fc.args.category as ExpenseCategory) || 'Other';
-                callbacks.onAddExpense?.(label, amount, category);
-                executionResult = `Transaction for ${label} of $${amount} logged to secure ledger.`;
+                const target = (fc.args.target as TaskType) || 'Daily';
+                callbacks.onAddTask?.(title, priority, target);
+                executionResult = `Task ${title} added.`;
+              } else if (fc.name === 'emailBriefing') {
+                callbacks.onDispatchEmail?.();
+                executionResult = `Email briefing dispatched to your terminal, Sir.`;
+              } else if (fc.name === 'generateDailyReport') {
+                callbacks.onGenerateReport?.();
+                executionResult = `Analyzing achievements...`;
               }
               
               this.sessionPromise?.then((session) => {
                 session.sendToolResponse({
-                  functionResponses: { 
-                    id: fc.id, 
-                    name: fc.name, 
-                    response: { result: executionResult } 
-                  }
+                  functionResponses: { id: fc.id, name: fc.name, response: { result: executionResult } }
                 });
               });
             }
@@ -147,24 +149,14 @@ export class GeminiVoiceService {
                 const source = this.outputAudioContext.createBufferSource();
                 source.buffer = audioBuffer;
                 source.connect(this.outputAudioContext.destination);
-                source.addEventListener('ended', () => { this.sources.delete(source); });
                 source.start(this.nextStartTime);
                 this.nextStartTime += audioBuffer.duration;
                 this.sources.add(source);
               }
             }
           }
-
-          if (message.serverContent?.interrupted) {
-            this.sources.forEach(s => { try { s.stop(); } catch(e){} });
-            this.sources.clear();
-            this.nextStartTime = 0;
-          }
         },
-        onerror: (e) => {
-          console.error('Gemini Live Error:', e);
-          this.stop();
-        },
+        onerror: (e) => this.stop(),
         onclose: () => this.stop(),
       },
       config: {
@@ -172,7 +164,7 @@ export class GeminiVoiceService {
         speechConfig: {
           voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
         },
-        tools: [{ functionDeclarations: [addTaskTool, addExpenseTool] }],
+        tools: [{ functionDeclarations: [addTaskTool, emailBriefingTool, generateReportTool] }],
         systemInstruction: systemInstruction,
         outputAudioTranscription: {},
         inputAudioTranscription: {},
@@ -184,46 +176,28 @@ export class GeminiVoiceService {
     this.active = false;
     this.sources.forEach(s => { try { s.stop(); } catch (e) {} });
     this.sources.clear();
-    this.sessionPromise?.then(session => { try { session.close(); } catch (e) {} });
-    if (this.inputAudioContext && this.inputAudioContext.state !== 'closed') {
-      try { this.inputAudioContext.close(); } catch (e) {}
-    }
-    if (this.outputAudioContext && this.outputAudioContext.state !== 'closed') {
-      try { this.outputAudioContext.close(); } catch (e) {}
-    }
-    this.inputAudioContext = null;
-    this.outputAudioContext = null;
-    this.sessionPromise = null;
-    this.ai = null;
-    this.nextStartTime = 0;
+    this.sessionPromise?.then(session => session.close());
+    this.inputAudioContext?.close();
+    this.outputAudioContext?.close();
   }
 
   private createBlob(data: Float32Array): Blob {
     const l = data.length;
     const int16 = new Int16Array(l);
-    for (let i = 0; i < l; i++) {
-      int16[i] = data[i] * 32768;
-    }
-    return {
-      data: this.encode(new Uint8Array(int16.buffer)),
-      mimeType: 'audio/pcm;rate=16000',
-    };
+    for (let i = 0; i < l; i++) int16[i] = data[i] * 32768;
+    return { data: this.encode(new Uint8Array(int16.buffer)), mimeType: 'audio/pcm;rate=16000' };
   }
 
   private decode(base64: string) {
     const binaryString = atob(base64);
     const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
+    for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
     return bytes;
   }
 
   private encode(bytes: Uint8Array) {
     let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
     return btoa(binary);
   }
 
@@ -233,9 +207,7 @@ export class GeminiVoiceService {
     const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
     for (let channel = 0; channel < numChannels; channel++) {
       const channelData = buffer.getChannelData(channel);
-      for (let i = 0; i < frameCount; i++) {
-        channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
-      }
+      for (let i = 0; i < frameCount; i++) channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
     }
     return buffer;
   }

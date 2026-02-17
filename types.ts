@@ -1,13 +1,16 @@
 
 export type PriorityLevel = 'Critical' | 'Standard' | 'Low';
 export type ExpenseCategory = 'Food' | 'Rent' | 'Travel' | 'Health' | 'Tech' | 'Other';
+export type TaskType = 'Main' | 'Daily';
 
 export interface Task {
   id: string;
   title: string;
-  deadline: string;
+  deadline: string; // ISO string or human readable
   priority: PriorityLevel;
   completed: boolean;
+  type: TaskType;
+  lastNotified?: string; // ISO string to prevent double emails
 }
 
 export interface Expense {
@@ -22,31 +25,35 @@ export interface BudgetConfig {
   limit: number;
 }
 
+export interface NotificationSettings {
+  emailEnabled: boolean;
+  operatorEmail: string;
+  alertThresholdHours: number;
+}
+
 export interface DashboardState {
   tasks: Task[];
   expenses: Expense[];
   budgetConfig: BudgetConfig;
+  notificationSettings: NotificationSettings;
 }
 
-/**
- * Interface used by DashboardGrid component.
- */
+export interface PerformanceReport {
+  summary: string;
+  score: number;
+  timestamp: string;
+}
+
 export interface PriorityTask {
   title: string;
   time: string;
 }
 
-/**
- * Interface used by DashboardGrid component.
- */
 export interface Budget {
   total: string;
   trend: string;
 }
 
-/**
- * Interface used by Timeline component.
- */
 export interface TimelineItem {
   id: string;
   title: string;
@@ -55,9 +62,6 @@ export interface TimelineItem {
   color: string;
 }
 
-/**
- * Interface used by FinanceOverview component.
- */
 export interface FinanceItem {
   icon: string;
   label: string;
