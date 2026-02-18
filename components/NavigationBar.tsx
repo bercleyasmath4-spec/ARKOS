@@ -1,8 +1,8 @@
 
 import React from 'react';
-import { Home, Search, Bell, User, MessageSquare } from 'lucide-react';
+import { Home, Search, MessageSquare, Calendar } from 'lucide-react';
 
-export type TabType = 'home' | 'chat' | 'search' | 'notifications';
+export type TabType = 'home' | 'chat' | 'search' | 'calendar';
 
 interface NavigationBarProps {
   onMicClick: () => void;
@@ -27,10 +27,10 @@ const NavigationBar: React.FC<NavigationBarProps> = ({
       </button>
 
       <button 
-        onClick={() => onTabChange('chat')}
-        className={`p-2 rounded-full transition-all duration-300 ${activeTab === 'chat' ? 'text-cyan-400 bg-cyan-400/10' : 'text-white/40 hover:text-white/70 hover:bg-white/5'}`}
+        onClick={() => onTabChange('calendar')}
+        className={`p-2 rounded-full transition-all duration-300 ${activeTab === 'calendar' ? 'text-cyan-400 bg-cyan-400/10' : 'text-white/40 hover:text-white/70 hover:bg-white/5'}`}
       >
-        <MessageSquare size={22} />
+        <Calendar size={22} />
       </button>
 
       {/* Center Mic Button */}
@@ -49,17 +49,17 @@ const NavigationBar: React.FC<NavigationBarProps> = ({
       </div>
 
       <button 
+        onClick={() => onTabChange('chat')}
+        className={`p-2 rounded-full transition-all duration-300 ${activeTab === 'chat' ? 'text-cyan-400 bg-cyan-400/10' : 'text-white/40 hover:text-white/70 hover:bg-white/5'}`}
+      >
+        <MessageSquare size={22} />
+      </button>
+      
+      <button 
         onClick={() => onTabChange('search')}
         className={`p-2 rounded-full transition-all duration-300 ${activeTab === 'search' ? 'text-cyan-400 bg-cyan-400/10' : 'text-white/40 hover:text-white/70 hover:bg-white/5'}`}
       >
         <Search size={22} />
-      </button>
-      
-      <button 
-        onClick={() => onTabChange('notifications')}
-        className={`p-2 rounded-full transition-all duration-300 ${activeTab === 'notifications' ? 'text-cyan-400 bg-cyan-400/10' : 'text-white/40 hover:text-white/70 hover:bg-white/5'}`}
-      >
-        <Bell size={22} />
       </button>
     </nav>
   );

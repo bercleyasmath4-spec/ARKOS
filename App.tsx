@@ -1,7 +1,8 @@
+
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   Settings, X, Plus, Trash2, CheckCircle2, 
-  Circle, Activity, Search, Bell, Shield, User, LogOut, Lock, Unlock, Loader2, BarChart2, ClipboardList, Mail, Send, DollarSign, CreditCard, TrendingDown, Edit2, Clock, Filter, Check, Cloud, Sparkles, Zap, Trophy, Target, PieChart, AlertTriangle, RefreshCcw
+  Circle, Activity, Search, Bell, Shield, User, LogOut, Lock, Unlock, Loader2, BarChart2, ClipboardList, Mail, Send, DollarSign, CreditCard, TrendingDown, Edit2, Clock, Filter, Check, Cloud, Sparkles, Zap, Trophy, Target, PieChart, AlertTriangle, RefreshCcw, FileText
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import { INITIAL_STATE, PRIORITY_COLORS } from './constants.tsx';
@@ -11,6 +12,7 @@ import NavigationBar, { TabType } from './components/NavigationBar.tsx';
 import GlassCard from './components/GlassCard.tsx';
 import FinanceOverview from './components/FinanceOverview.tsx';
 import ChatInterface from './components/ChatInterface.tsx';
+import CalendarView from './components/CalendarView.tsx';
 import { GeminiVoiceService } from './services/geminiLive.ts';
 import { NotificationService } from './services/notificationService.ts';
 import { AuthProvider, useAuth } from './contexts/AuthContext.tsx';
@@ -21,7 +23,11 @@ const Dashboard: React.FC = () => {
     const { user, signOut } = useAuth();
     const [activeTab, setActiveTab] = useState<TabType>('home');
     const [taskTab, setTaskTab] = useState<TaskType>('Daily');
+    
+    // Settings State
     const [showSettings, setShowSettings] = useState(false);
+    const [settingsTab, setSettingsTab] = useState<'general' | 'notifications'>('general');
+
     const [showAddModal, setShowAddModal] = useState<'task' | 'expense' | null>(null);
     const [performanceReport, setPerformanceReport] = useState<PerformanceReport | null>(null);
     const [isGeneratingReport, setIsGeneratingReport] = useState(false);
@@ -359,13 +365,28 @@ const Dashboard: React.FC = () => {
 
     // Task Filtering Logic for Main View
     const filteredTasks = useMemo(() => {
+        const todayStr = new Date().toISOString().split('T')[0];
+        
         return state.tasks.filter(t => {
             const matchesType = t.type === taskTab;
             const matchesPriority = priorityFilter === 'All' || t.priority === priorityFilter;
             const matchesStatus = statusFilter === 'All' || 
                 (statusFilter === 'Pending' && !t.completed) || 
                 (statusFilter === 'Completed' && t.completed);
-            return matchesType && matchesPriority && matchesStatus;
+            
+            // FRESH START LOGIC: 
+            // If a task is completed, it must have been completed TODAY to show up in the main list.
+            // Old completed tasks are hidden (but visible in Calendar view).
+            let matchesDate = true;
+            if (t.completed) {
+                // Determine completion date or fallback to start time if missing
+                const completedDate = t.lastCompletedDate || t.startTime.split('T')[0];
+                if (completedDate !== todayStr) {
+                    matchesDate = false;
+                }
+            }
+
+            return matchesType && matchesPriority && matchesStatus && matchesDate;
         });
     }, [state.tasks, taskTab, priorityFilter, statusFilter]);
     
@@ -521,6 +542,12 @@ const Dashboard: React.FC = () => {
                         />
                     </section>
                 );
+            case 'calendar':
+                return (
+                    <section className="h-full">
+                        <CalendarView tasks={state.tasks} />
+                    </section>
+                );
             case 'search':
                 return (
                     <section className="animate-in fade-in slide-in-from-bottom-4 duration-500 min-h-[60vh]">
@@ -592,37 +619,6 @@ const Dashboard: React.FC = () => {
                                 <div className="text-center py-10 opacity-20">
                                     <span className="text-[10px] font-mono uppercase tracking-widest">Type to search archives...</span>
                                 </div>
-                            )}
-                        </div>
-                    </section>
-                );
-            case 'notifications':
-                return (
-                    <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                        <div className="flex justify-between items-center mb-6">
-                          <h2 className="text-[11px] font-bold tracking-[0.2em] text-white/40 uppercase">Notifications</h2>
-                          <button onClick={() => setState(s => ({...s, notificationLogs: []}))} className="text-[9px] text-cyan-400/40 hover:text-cyan-400 uppercase font-bold tracking-widest transition-colors">Clear History</button>
-                        </div>
-                        <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-                            {state.notificationLogs.length === 0 ? (
-                                <div className="h-40 flex flex-col items-center justify-center border border-dashed border-white/5 rounded-2xl opacity-10">
-                                    <Bell size={24} className="mb-2" />
-                                    <span className="text-[8px] font-bold uppercase tracking-widest">No Recent Alerts</span>
-                                </div>
-                            ) : (
-                                state.notificationLogs.map(log => (
-                                    <GlassCard key={log.id} className="p-4 border-l-2 border-l-cyan-400/50 hover:bg-white/[0.08]">
-                                        <div className="flex justify-between items-start mb-2">
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-[10px] font-bold text-white uppercase tracking-widest">{log.title}</span>
-                                            </div>
-                                            <span className="text-[8px] font-mono text-white/30">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                                        </div>
-                                        <div className="text-[9px] leading-relaxed text-white/50 font-mono mt-3 p-3 bg-black/40 rounded-xl border border-white/5 shadow-inner">
-                                            {log.content}
-                                        </div>
-                                    </GlassCard>
-                                ))
                             )}
                         </div>
                     </section>
@@ -810,288 +806,335 @@ const Dashboard: React.FC = () => {
     );
 
     return (
-        <div className="min-h-screen relative pb-32">
-            <div className="fixed top-0 left-0 w-full h-full bg-[#050505] -z-10" />
-            
-            {voiceError && (
-                <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[150] w-[90%] max-w-md animate-in fade-in slide-in-from-top-4 duration-500">
-                    <GlassCard className="border-red-500/50 bg-red-900/20 flex items-start gap-4 p-5 shadow-[0_0_50px_rgba(220,38,38,0.2)] backdrop-blur-2xl">
-                        <div className="p-2 bg-red-500/20 rounded-xl mt-0.5">
-                            <AlertTriangle className="text-red-500" size={20} />
+        <AuthProvider>
+            <div className="min-h-screen relative pb-32">
+                <div className="fixed top-0 left-0 w-full h-full bg-[#050505] -z-10" />
+                
+                {voiceError && (
+                    <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[150] w-[90%] max-w-md animate-in fade-in slide-in-from-top-4 duration-500">
+                        <GlassCard className="border-red-500/50 bg-red-900/20 flex items-start gap-4 p-5 shadow-[0_0_50px_rgba(220,38,38,0.2)] backdrop-blur-2xl">
+                            <div className="p-2 bg-red-500/20 rounded-xl mt-0.5">
+                                <AlertTriangle className="text-red-500" size={20} />
+                            </div>
+                            <div className="flex-1">
+                                <h4 className="text-[10px] font-bold text-red-500 uppercase tracking-[0.2em] mb-1.5">System Alert</h4>
+                                <p className="text-xs font-medium text-red-200/90 leading-relaxed font-mono">{voiceError}</p>
+                            </div>
+                            <button onClick={() => setVoiceError(null)} className="text-red-500/50 hover:text-red-500 transition-colors p-1">
+                                <X size={18} />
+                            </button>
+                        </GlassCard>
+                    </div>
+                )}
+
+                {/* Performance Report Modal */}
+                {performanceReport && (
+                  <div className="fixed inset-0 z-[400] flex items-center justify-center p-6 bg-black/90 backdrop-blur-3xl animate-in fade-in zoom-in-95 duration-500">
+                    <GlassCard className="w-full max-w-xl p-10 border-cyan-500/40 shadow-[0_0_50px_rgba(6,182,212,0.1)]">
+                      <div className="flex justify-between items-start mb-10">
+                        <div className="flex items-center gap-4">
+                          <div className="w-14 h-14 rounded-2xl bg-cyan-400/10 border border-cyan-400/30 flex items-center justify-center">
+                            <Trophy className="text-cyan-400" size={28} />
+                          </div>
+                          <div>
+                            <h2 className="text-2xl font-bold text-white uppercase tracking-widest">Mission Briefing</h2>
+                            <p className="text-[9px] text-white/30 uppercase tracking-[0.3em] mt-1">Daily Performance Analysis</p>
+                          </div>
                         </div>
-                        <div className="flex-1">
-                            <h4 className="text-[10px] font-bold text-red-500 uppercase tracking-[0.2em] mb-1.5">System Alert</h4>
-                            <p className="text-xs font-medium text-red-200/90 leading-relaxed font-mono">{voiceError}</p>
+                        <button onClick={() => setPerformanceReport(null)} className="p-3 text-white/20 hover:text-white transition-all"><X size={24} /></button>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
+                        <div className="flex flex-col items-center justify-center p-8 rounded-3xl bg-white/[0.02] border border-white/5 relative overflow-hidden group">
+                          <div className="absolute inset-0 bg-cyan-400/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                          <div className="relative z-10 text-center">
+                            <span className="text-[10px] font-bold text-white/20 uppercase tracking-[0.3em] block mb-4">Overall Score</span>
+                            <div className="text-6xl font-black text-cyan-400 tabular-nums mb-2">{performanceReport.score}</div>
+                            <div className="w-full h-1 bg-white/5 rounded-full mt-4">
+                              <div className="h-full bg-cyan-400 rounded-full shadow-[0_0_10px_rgba(6,182,212,0.5)] transition-all duration-1000" style={{ width: `${performanceReport.score}%` }} />
+                            </div>
+                          </div>
                         </div>
-                        <button onClick={() => setVoiceError(null)} className="text-red-500/50 hover:text-red-500 transition-colors p-1">
-                            <X size={18} />
-                        </button>
+                        <div className="space-y-4">
+                          <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/5 flex items-center gap-4">
+                            <Target className="text-cyan-400" size={20} />
+                            <div>
+                              <div className="text-[10px] font-bold text-white/20 uppercase">Completed</div>
+                              <div className="text-xl font-bold text-white tabular-nums">
+                                {state.tasks.filter(t => t.type === 'Daily' && t.completed).length} / {state.tasks.filter(t => t.type === 'Daily').length}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/5 flex items-center gap-4">
+                            <PieChart className="text-cyan-400" size={20} />
+                            <div>
+                              <div className="text-[10px] font-bold text-white/20 uppercase">Efficiency</div>
+                              <div className="text-xl font-bold text-white tabular-nums">
+                                {Math.round((state.tasks.filter(t => t.type === 'Daily' && t.completed).length / (state.tasks.filter(t => t.type === 'Daily').length || 1)) * 100)}%
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-6 rounded-3xl bg-black/40 border border-white/5 shadow-inner">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Sparkles size={14} className="text-cyan-400" />
+                          <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">AI Qualitative Analysis</span>
+                        </div>
+                        <p className="text-sm text-white/70 leading-relaxed font-medium whitespace-pre-line">
+                          {performanceReport.summary}
+                        </p>
+                      </div>
+
+                      <button 
+                        onClick={() => setPerformanceReport(null)}
+                        className="w-full mt-10 py-5 bg-cyan-400 text-black font-bold uppercase tracking-widest rounded-2xl hover:bg-cyan-300 transition-all shadow-lg active:scale-95"
+                      >
+                        Acknowledge
+                      </button>
                     </GlassCard>
-                </div>
-            )}
-
-            {/* Performance Report Modal */}
-            {performanceReport && (
-              <div className="fixed inset-0 z-[400] flex items-center justify-center p-6 bg-black/90 backdrop-blur-3xl animate-in fade-in zoom-in-95 duration-500">
-                <GlassCard className="w-full max-w-xl p-10 border-cyan-500/40 shadow-[0_0_50px_rgba(6,182,212,0.1)]">
-                  <div className="flex justify-between items-start mb-10">
-                    <div className="flex items-center gap-4">
-                      <div className="w-14 h-14 rounded-2xl bg-cyan-400/10 border border-cyan-400/30 flex items-center justify-center">
-                        <Trophy className="text-cyan-400" size={28} />
-                      </div>
-                      <div>
-                        <h2 className="text-2xl font-bold text-white uppercase tracking-widest">Mission Briefing</h2>
-                        <p className="text-[9px] text-white/30 uppercase tracking-[0.3em] mt-1">Daily Performance Analysis</p>
-                      </div>
-                    </div>
-                    <button onClick={() => setPerformanceReport(null)} className="p-3 text-white/20 hover:text-white transition-all"><X size={24} /></button>
                   </div>
+                )}
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
-                    <div className="flex flex-col items-center justify-center p-8 rounded-3xl bg-white/[0.02] border border-white/5 relative overflow-hidden group">
-                      <div className="absolute inset-0 bg-cyan-400/5 opacity-0 group-hover:opacity-100 transition-opacity" />
-                      <div className="relative z-10 text-center">
-                        <span className="text-[10px] font-bold text-white/20 uppercase tracking-[0.3em] block mb-4">Overall Score</span>
-                        <div className="text-6xl font-black text-cyan-400 tabular-nums mb-2">{performanceReport.score}</div>
-                        <div className="w-full h-1 bg-white/5 rounded-full mt-4">
-                          <div className="h-full bg-cyan-400 rounded-full shadow-[0_0_10px_rgba(6,182,212,0.5)] transition-all duration-1000" style={{ width: `${performanceReport.score}%` }} />
-                        </div>
-                      </div>
-                    </div>
-                    <div className="space-y-4">
-                      <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/5 flex items-center gap-4">
-                        <Target className="text-cyan-400" size={20} />
-                        <div>
-                          <div className="text-[10px] font-bold text-white/20 uppercase">Completed</div>
-                          <div className="text-xl font-bold text-white tabular-nums">
-                            {state.tasks.filter(t => t.type === 'Daily' && t.completed).length} / {state.tasks.filter(t => t.type === 'Daily').length}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/5 flex items-center gap-4">
-                        <PieChart className="text-cyan-400" size={20} />
-                        <div>
-                          <div className="text-[10px] font-bold text-white/20 uppercase">Efficiency</div>
-                          <div className="text-xl font-bold text-white tabular-nums">
-                            {Math.round((state.tasks.filter(t => t.type === 'Daily' && t.completed).length / (state.tasks.filter(t => t.type === 'Daily').length || 1)) * 100)}%
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                {/* Updated Settings Modal */}
+                {showSettings && (
+                    <div className="fixed inset-0 z-[120] flex items-center justify-center p-6 bg-black/80 backdrop-blur-2xl animate-in fade-in duration-500">
+                        <GlassCard className="w-full max-lg p-10 relative max-h-[90vh] overflow-y-auto border-cyan-400/20 shadow-2xl">
+                            <button onClick={() => setShowSettings(false)} className="absolute top-6 right-6 text-white/20 hover:text-white transition-all"><X size={28} /></button>
+                            <h2 className="text-2xl font-bold text-white mb-6 uppercase tracking-widest">Control Panel</h2>
+                            
+                            {/* Tab Switcher */}
+                            <div className="flex gap-4 mb-8 border-b border-white/10 pb-1">
+                                <button 
+                                    onClick={() => setSettingsTab('general')} 
+                                    className={`text-[10px] font-bold uppercase tracking-widest pb-2 transition-all border-b-2 ${settingsTab === 'general' ? 'text-cyan-400 border-cyan-400' : 'text-white/30 border-transparent hover:text-white/60'}`}
+                                >
+                                    <Settings size={14} className="inline mr-2 mb-0.5" /> General
+                                </button>
+                                <button 
+                                    onClick={() => setSettingsTab('notifications')} 
+                                    className={`text-[10px] font-bold uppercase tracking-widest pb-2 transition-all border-b-2 ${settingsTab === 'notifications' ? 'text-cyan-400 border-cyan-400' : 'text-white/30 border-transparent hover:text-white/60'}`}
+                                >
+                                    <Bell size={14} className="inline mr-2 mb-0.5" /> System Logs
+                                </button>
+                            </div>
 
-                  <div className="p-6 rounded-3xl bg-black/40 border border-white/5 shadow-inner">
-                    <div className="flex items-center gap-2 mb-4">
-                      <Sparkles size={14} className="text-cyan-400" />
-                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">AI Qualitative Analysis</span>
-                    </div>
-                    <p className="text-sm text-white/70 leading-relaxed font-medium whitespace-pre-line">
-                      {performanceReport.summary}
-                    </p>
-                  </div>
-
-                  <button 
-                    onClick={() => setPerformanceReport(null)}
-                    className="w-full mt-10 py-5 bg-cyan-400 text-black font-bold uppercase tracking-widest rounded-2xl hover:bg-cyan-300 transition-all shadow-lg active:scale-95"
-                  >
-                    Acknowledge
-                  </button>
-                </GlassCard>
-              </div>
-            )}
-
-            {/* Existing Settings & Add Modals... */}
-            {showSettings && (
-                <div className="fixed inset-0 z-[120] flex items-center justify-center p-6 bg-black/80 backdrop-blur-2xl animate-in fade-in duration-500">
-                    <GlassCard className="w-full max-lg p-10 relative max-h-[90vh] overflow-y-auto border-cyan-400/20 shadow-2xl">
-                        <button onClick={() => setShowSettings(false)} className="absolute top-6 right-6 text-white/20 hover:text-white transition-all"><X size={28} /></button>
-                        <h2 className="text-2xl font-bold text-white mb-10 uppercase tracking-widest">Settings</h2>
-                        
-                        <div className="space-y-8 mb-10">
-                            <div className="p-6 bg-white/[0.03] backdrop-blur-3xl border border-white/10 rounded-3xl space-y-6">
-                                <div className="flex justify-between items-center">
-                                  <div className="flex flex-col">
-                                    <span className="text-[11px] text-white font-bold uppercase tracking-widest">Email Notifications</span>
-                                    <span className="text-[8px] text-white/30 uppercase tracking-widest mt-1">Get alerts for upcoming tasks</span>
-                                  </div>
-                                  <button onClick={() => setState(prev => ({ ...prev, notificationSettings: { ...prev.notificationSettings, emailEnabled: !prev.notificationSettings.emailEnabled } }))} className={`w-12 h-6 rounded-full transition-all relative p-1 ${state.notificationSettings.emailEnabled ? 'bg-cyan-400' : 'bg-white/10'}`}>
-                                    <div className={`w-4 h-4 rounded-full bg-white transition-all shadow-md ${state.notificationSettings.emailEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
-                                  </button>
-                                </div>
-                                <div className="space-y-3">
-                                    <label className="text-[8px] font-bold text-white/30 uppercase tracking-widest flex items-center justify-between ml-1">
-                                        Email Address
-                                        <div className="flex items-center gap-1.5">
-                                            {isEmailLocked ? <Lock size={9} className="text-white/20" /> : <Unlock size={9} className="text-cyan-400" />}
+                            {settingsTab === 'general' ? (
+                                <div className="space-y-8 mb-10 animate-in fade-in slide-in-from-right-4 duration-300">
+                                    <div className="p-6 bg-white/[0.03] backdrop-blur-3xl border border-white/10 rounded-3xl space-y-6">
+                                        <div className="flex justify-between items-center">
+                                          <div className="flex flex-col">
+                                            <span className="text-[11px] text-white font-bold uppercase tracking-widest">Email Notifications</span>
+                                            <span className="text-[8px] text-white/30 uppercase tracking-widest mt-1">Get alerts for upcoming tasks</span>
+                                          </div>
+                                          <button onClick={() => setState(prev => ({ ...prev, notificationSettings: { ...prev.notificationSettings, emailEnabled: !prev.notificationSettings.emailEnabled } }))} className={`w-12 h-6 rounded-full transition-all relative p-1 ${state.notificationSettings.emailEnabled ? 'bg-cyan-400' : 'bg-white/10'}`}>
+                                            <div className={`w-4 h-4 rounded-full bg-white transition-all shadow-md ${state.notificationSettings.emailEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                                          </button>
                                         </div>
-                                    </label>
-                                    <div className="flex gap-3">
-                                        <input 
-                                            disabled={isEmailLocked} 
-                                            type="email" 
-                                            value={tempEmail} 
-                                            onChange={(e) => setTempEmail(e.target.value)} 
-                                            placeholder="ENTER EMAIL ADDRESS..." 
-                                            className={`flex-1 bg-black/40 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-xs outline-none transition-all placeholder:text-white/10 ${isEmailLocked ? 'opacity-40' : 'focus:border-cyan-400/50'}`} 
-                                        />
-                                        {isEmailLocked ? (
-                                            <button onClick={() => setShowUnlockModal(true)} className="px-5 py-2 bg-white/5 border border-white/10 rounded-2xl text-[9px] font-bold uppercase tracking-widest hover:bg-white/10 text-cyan-400 transition-all">Unlock</button>
+                                        <div className="space-y-3">
+                                            <label className="text-[8px] font-bold text-white/30 uppercase tracking-widest flex items-center justify-between ml-1">
+                                                Email Address
+                                                <div className="flex items-center gap-1.5">
+                                                    {isEmailLocked ? <Lock size={9} className="text-white/20" /> : <Unlock size={9} className="text-cyan-400" />}
+                                                </div>
+                                            </label>
+                                            <div className="flex gap-3">
+                                                <input 
+                                                    disabled={isEmailLocked} 
+                                                    type="email" 
+                                                    value={tempEmail} 
+                                                    onChange={(e) => setTempEmail(e.target.value)} 
+                                                    placeholder="ENTER EMAIL ADDRESS..." 
+                                                    className={`flex-1 bg-black/40 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-xs outline-none transition-all placeholder:text-white/10 ${isEmailLocked ? 'opacity-40' : 'focus:border-cyan-400/50'}`} 
+                                                />
+                                                {isEmailLocked ? (
+                                                    <button onClick={() => setShowUnlockModal(true)} className="px-5 py-2 bg-white/5 border border-white/10 rounded-2xl text-[9px] font-bold uppercase tracking-widest hover:bg-white/10 text-cyan-400 transition-all">Unlock</button>
+                                                ) : (
+                                                    <button onClick={sendTestEmail} disabled={isTestingEmail} className="px-5 py-2 bg-cyan-400/10 text-cyan-400 border border-cyan-400/30 rounded-2xl text-[9px] font-bold uppercase tracking-widest hover:bg-cyan-400/20 disabled:opacity-50 transition-all">
+                                                        {isTestingEmail ? <Loader2 className="animate-spin" size={14} /> : 'Test'}
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="p-6 bg-white/[0.03] backdrop-blur-3xl border border-white/10 rounded-3xl space-y-4">
+                                        <div className="space-y-2">
+                                            <label className="text-[8px] font-bold text-white/30 uppercase tracking-widest ml-1">Monthly Budget ($)</label>
+                                            <input type="number" value={state.budgetConfig.limit} onChange={(e) => setState(prev => ({ ...prev, budgetConfig: { limit: parseInt(e.target.value) || 0 } }))} className="w-full bg-black/40 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-xs focus:border-cyan-400/50 outline-none transition-all tabular-nums" />
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <button onClick={saveSettings} className="py-5 bg-cyan-400 text-black font-bold text-xs tracking-widest uppercase rounded-2xl flex items-center justify-center gap-3 hover:bg-cyan-300 transition-all active:scale-95"><Check size={18} /> Save Changes</button>
+                                        <button onClick={signOut} className="py-5 bg-white/5 border border-white/10 rounded-2xl text-white/40 font-bold text-xs tracking-widest uppercase hover:text-red-500 transition-all flex items-center justify-center gap-3"><LogOut size={18} /> Sign Out</button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+                                    <div className="flex justify-between items-center mb-6">
+                                        <h3 className="text-[9px] text-white/30 uppercase tracking-widest">Recent Activity</h3>
+                                        <button onClick={() => setState(s => ({...s, notificationLogs: []}))} className="text-[9px] text-cyan-400/40 hover:text-cyan-400 uppercase font-bold tracking-widest transition-colors flex items-center gap-1">
+                                            <Trash2 size={12} /> Clear Log
+                                        </button>
+                                    </div>
+                                    <div className="space-y-3 max-h-[50vh] overflow-y-auto custom-scrollbar pr-2">
+                                        {state.notificationLogs.length === 0 ? (
+                                            <div className="py-12 flex flex-col items-center justify-center border border-dashed border-white/5 rounded-2xl opacity-10">
+                                                <FileText size={24} className="mb-2" />
+                                                <span className="text-[8px] font-bold uppercase tracking-widest">No logs recorded</span>
+                                            </div>
                                         ) : (
-                                            <button onClick={sendTestEmail} disabled={isTestingEmail} className="px-5 py-2 bg-cyan-400/10 text-cyan-400 border border-cyan-400/30 rounded-2xl text-[9px] font-bold uppercase tracking-widest hover:bg-cyan-400/20 disabled:opacity-50 transition-all">
-                                                {isTestingEmail ? <Loader2 className="animate-spin" size={14} /> : 'Test'}
-                                            </button>
+                                            state.notificationLogs.map(log => (
+                                                <div key={log.id} className="p-4 bg-white/[0.02] border border-white/5 rounded-xl hover:bg-white/[0.04] transition-colors">
+                                                    <div className="flex justify-between items-start mb-2">
+                                                        <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest">{log.title}</span>
+                                                        <span className="text-[8px] font-mono text-white/30">{new Date(log.timestamp).toLocaleTimeString()} • {new Date(log.timestamp).toLocaleDateString()}</span>
+                                                    </div>
+                                                    <p className="text-[9px] text-white/50 font-mono leading-relaxed">{log.content}</p>
+                                                </div>
+                                            ))
                                         )}
                                     </div>
                                 </div>
-                            </div>
-
-                            <div className="p-6 bg-white/[0.03] backdrop-blur-3xl border border-white/10 rounded-3xl space-y-4">
-                                <div className="space-y-2">
-                                    <label className="text-[8px] font-bold text-white/30 uppercase tracking-widest ml-1">Monthly Budget ($)</label>
-                                    <input type="number" value={state.budgetConfig.limit} onChange={(e) => setState(prev => ({ ...prev, budgetConfig: { limit: parseInt(e.target.value) || 0 } }))} className="w-full bg-black/40 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-xs focus:border-cyan-400/50 outline-none transition-all tabular-nums" />
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                            <button onClick={saveSettings} className="py-5 bg-cyan-400 text-black font-bold text-xs tracking-widest uppercase rounded-2xl flex items-center justify-center gap-3 hover:bg-cyan-300 transition-all active:scale-95"><Check size={18} /> Save Changes</button>
-                            <button onClick={signOut} className="py-5 bg-white/5 border border-white/10 rounded-2xl text-white/40 font-bold text-xs tracking-widest uppercase hover:text-red-500 transition-all flex items-center justify-center gap-3"><LogOut size={18} /> Sign Out</button>
-                        </div>
-                    </GlassCard>
-                </div>
-            )}
-
-            {showAddModal && (
-                <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-black/95 backdrop-blur-3xl animate-in zoom-in-95 duration-300">
-                    <GlassCard className="w-full max-sm p-10 border-cyan-400/30">
-                        <h2 className="text-xl font-bold text-white mb-8 uppercase tracking-widest">{showAddModal === 'task' ? 'Add Task' : 'Add Expense'}</h2>
-                        
-                        {showAddModal === 'task' ? (
-                            <form onSubmit={(e) => {
-                                e.preventDefault();
-                                const formData = new FormData(e.currentTarget);
-                                addTask(
-                                    formData.get('title') as string, 
-                                    formData.get('priority') as PriorityLevel, 
-                                    formData.get('target') as TaskType, 
-                                    false,
-                                    formData.get('startTime') as string,
-                                    formData.get('endTime') as string,
-                                    formData.get('recurring') === 'on'
-                                );
-                            }} className="space-y-6">
-                                <div className="space-y-2">
-                                    <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Task Name</label>
-                                    <input required name="title" placeholder="ENTER TASK TITLE..." className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-sm focus:border-cyan-400/50 outline-none transition-all font-bold" />
-                                </div>
-                                
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="space-y-2">
-                                        <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Priority</label>
-                                        <div className="relative">
-                                            <select name="priority" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] font-bold uppercase outline-none appearance-none hover:border-white/20 transition-all">
-                                                <option value="Critical" className="bg-[#050505]">CRITICAL</option>
-                                                <option value="Standard" className="bg-[#050505]">STANDARD</option>
-                                                <option value="Low" className="bg-[#050505]">LOW</option>
-                                            </select>
-                                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400/40 text-[8px]">▼</div>
-                                        </div>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Category</label>
-                                        <div className="relative">
-                                            <select name="target" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] font-bold uppercase outline-none appearance-none hover:border-white/20 transition-all">
-                                                <option value="Daily" className="bg-[#050505]">DAILY</option>
-                                                <option value="Main" className="bg-[#050505]">TASKS</option>
-                                            </select>
-                                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400/40 text-[8px]">▼</div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div className="space-y-2">
-                                        <label className="text-[7px] font-bold text-cyan-400/60 uppercase tracking-widest ml-1">Start Time</label>
-                                        <input required name="startTime" type="datetime-local" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] focus:border-cyan-400/50 outline-none transition-all" />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-[7px] font-bold text-red-400/60 uppercase tracking-widest ml-1">End Time</label>
-                                        <input required name="endTime" type="datetime-local" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] focus:border-cyan-400/50 outline-none transition-all" />
-                                    </div>
-                                </div>
-
-                                <label className="flex items-center gap-3 px-2 group cursor-pointer py-2">
-                                    <input name="recurring" type="checkbox" className="w-5 h-5 rounded-lg bg-white/5 border-white/20 text-cyan-400 focus:ring-cyan-400/20" />
-                                    <span className="text-[9px] text-white/30 group-hover:text-white/70 font-bold uppercase tracking-widest">Repeat Daily</span>
-                                </label>
-
-                                <div className="flex gap-4 pt-6 border-t border-white/5">
-                                    <button type="button" onClick={() => setShowAddModal(null)} className="flex-1 py-4 text-white/20 text-[10px] font-bold uppercase tracking-widest hover:text-white">Cancel</button>
-                                    <button type="submit" className="flex-1 py-4 bg-cyan-400 text-black font-bold text-[10px] rounded-2xl uppercase tracking-widest shadow-lg hover:bg-cyan-300 transition-all">Add Task</button>
-                                </div>
-                            </form>
-                        ) : (
-                            <form onSubmit={(e) => {
-                                e.preventDefault();
-                                const formData = new FormData(e.currentTarget);
-                                addExpense(formData.get('label') as string, parseFloat(formData.get('amount') as string) || 0, formData.get('category') as ExpenseCategory);
-                            }} className="space-y-6">
-                                <div className="space-y-2">
-                                    <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Description</label>
-                                    <input required name="label" placeholder="ENTER EXPENSE NAME..." className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-sm focus:border-cyan-400/50 outline-none transition-all font-bold" />
-                                </div>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="space-y-2">
-                                        <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Amount ($)</label>
-                                        <input required type="number" step="0.01" name="amount" placeholder="0.00" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-sm focus:border-cyan-400/50 outline-none transition-all font-mono" />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Type</label>
-                                        <div className="relative">
-                                            <select name="category" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] font-bold uppercase outline-none appearance-none hover:border-white/20 transition-all">
-                                                <option value="Other" className="bg-[#050505]">OTHER</option>
-                                                <option value="Food" className="bg-[#050505]">FOOD</option>
-                                                <option value="Rent" className="bg-[#050505]">RENT</option>
-                                                <option value="Travel" className="bg-[#050505]">TRAVEL</option>
-                                                <option value="Health" className="bg-[#050505]">HEALTH</option>
-                                                <option value="Tech" className="bg-[#050505]">TECH</option>
-                                            </select>
-                                            <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400/40 text-[8px]">▼</div>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="flex gap-4 pt-6 border-t border-white/5">
-                                    <button type="button" onClick={() => setShowAddModal(null)} className="flex-1 py-4 text-white/20 text-[10px] font-bold uppercase tracking-widest hover:text-white">Cancel</button>
-                                    <button type="submit" className="flex-1 py-4 bg-cyan-400 text-black font-bold text-[10px] rounded-2xl uppercase tracking-widest shadow-lg hover:bg-cyan-300 transition-all">Add Expense</button>
-                                </div>
-                            </form>
-                        )}
-                    </GlassCard>
-                </div>
-            )}
-
-            <main className="max-w-2xl mx-auto px-6 pt-10">
-                <header className="flex justify-between items-start mb-12">
-                    <div className="animate-in fade-in slide-in-from-left duration-700">
-                        <h1 className="text-3xl font-extralight text-white leading-tight">Welcome back.</h1>
+                            )}
+                        </GlassCard>
                     </div>
-                    <button onClick={() => setShowSettings(true)} className="w-12 h-12 rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10 flex items-center justify-center text-cyan-400 hover:text-cyan-300 hover:border-cyan-400/50 transition-all shadow-xl active:scale-90">
-                        <Settings size={22} />
-                    </button>
-                </header>
-
-                {activeTab === 'home' && (
-                    <section className="flex flex-col items-center justify-center h-56 mb-12 relative animate-in fade-in duration-500">
-                        <div className="absolute inset-0 bg-cyan-400/5 blur-[120px] rounded-full pointer-events-none animate-pulse"></div>
-                        <JarvisOrb isListening={isListening} />
-                    </section>
                 )}
 
-                {renderContent()}
-            </main>
+                {showAddModal && (
+                    <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-black/95 backdrop-blur-3xl animate-in zoom-in-95 duration-300">
+                        <GlassCard className="w-full max-sm p-10 border-cyan-400/30">
+                            <h2 className="text-xl font-bold text-white mb-8 uppercase tracking-widest">{showAddModal === 'task' ? 'Add Task' : 'Add Expense'}</h2>
+                            
+                            {showAddModal === 'task' ? (
+                                <form onSubmit={(e) => {
+                                    e.preventDefault();
+                                    const formData = new FormData(e.currentTarget);
+                                    addTask(
+                                        formData.get('title') as string, 
+                                        formData.get('priority') as PriorityLevel, 
+                                        formData.get('target') as TaskType, 
+                                        false,
+                                        formData.get('startTime') as string,
+                                        formData.get('endTime') as string,
+                                        formData.get('recurring') === 'on'
+                                    );
+                                }} className="space-y-6">
+                                    <div className="space-y-2">
+                                        <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Task Name</label>
+                                        <input required name="title" placeholder="ENTER TASK TITLE..." className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-sm focus:border-cyan-400/50 outline-none transition-all font-bold" />
+                                    </div>
+                                    
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Priority</label>
+                                            <div className="relative">
+                                                <select name="priority" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] font-bold uppercase outline-none appearance-none hover:border-white/20 transition-all">
+                                                    <option value="Critical" className="bg-[#050505]">CRITICAL</option>
+                                                    <option value="Standard" className="bg-[#050505]">STANDARD</option>
+                                                    <option value="Low" className="bg-[#050505]">LOW</option>
+                                                </select>
+                                                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400/40 text-[8px]">▼</div>
+                                            </div>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Category</label>
+                                            <div className="relative">
+                                                <select name="target" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] font-bold uppercase outline-none appearance-none hover:border-white/20 transition-all">
+                                                    <option value="Daily" className="bg-[#050505]">DAILY</option>
+                                                    <option value="Main" className="bg-[#050505]">TASKS</option>
+                                                </select>
+                                                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400/40 text-[8px]">▼</div>
+                                            </div>
+                                        </div>
+                                    </div>
 
-            <NavigationBar onMicClick={toggleMic} isListening={isListening} activeTab={activeTab} onTabChange={setActiveTab} />
-        </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <label className="text-[7px] font-bold text-cyan-400/60 uppercase tracking-widest ml-1">Start Time</label>
+                                            <input required name="startTime" type="datetime-local" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] focus:border-cyan-400/50 outline-none transition-all" />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-[7px] font-bold text-red-400/60 uppercase tracking-widest ml-1">End Time</label>
+                                            <input required name="endTime" type="datetime-local" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] focus:border-cyan-400/50 outline-none transition-all" />
+                                        </div>
+                                    </div>
+
+                                    <label className="flex items-center gap-3 px-2 group cursor-pointer py-2">
+                                        <input name="recurring" type="checkbox" className="w-5 h-5 rounded-lg bg-white/5 border-white/20 text-cyan-400 focus:ring-cyan-400/20" />
+                                        <span className="text-[9px] text-white/30 group-hover:text-white/70 font-bold uppercase tracking-widest">Repeat Daily</span>
+                                    </label>
+
+                                    <div className="flex gap-4 pt-6 border-t border-white/5">
+                                        <button type="button" onClick={() => setShowAddModal(null)} className="flex-1 py-4 text-white/20 text-[10px] font-bold uppercase tracking-widest hover:text-white">Cancel</button>
+                                        <button type="submit" className="flex-1 py-4 bg-cyan-400 text-black font-bold text-[10px] rounded-2xl uppercase tracking-widest shadow-lg hover:bg-cyan-300 transition-all">Add Task</button>
+                                    </div>
+                                </form>
+                            ) : (
+                                <form onSubmit={(e) => {
+                                    e.preventDefault();
+                                    const formData = new FormData(e.currentTarget);
+                                    addExpense(formData.get('label') as string, parseFloat(formData.get('amount') as string) || 0, formData.get('category') as ExpenseCategory);
+                                }} className="space-y-6">
+                                    <div className="space-y-2">
+                                        <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Description</label>
+                                        <input required name="label" placeholder="ENTER EXPENSE NAME..." className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-sm focus:border-cyan-400/50 outline-none transition-all font-bold" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Amount ($)</label>
+                                            <input required type="number" step="0.01" name="amount" placeholder="0.00" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-sm focus:border-cyan-400/50 outline-none transition-all font-mono" />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-[7px] font-bold text-white/30 uppercase tracking-widest ml-1">Type</label>
+                                            <div className="relative">
+                                                <select name="category" className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-4 rounded-2xl text-white text-[10px] font-bold uppercase outline-none appearance-none hover:border-white/20 transition-all">
+                                                    <option value="Other" className="bg-[#050505]">OTHER</option>
+                                                    <option value="Food" className="bg-[#050505]">FOOD</option>
+                                                    <option value="Rent" className="bg-[#050505]">RENT</option>
+                                                    <option value="Travel" className="bg-[#050505]">TRAVEL</option>
+                                                    <option value="Health" className="bg-[#050505]">HEALTH</option>
+                                                    <option value="Tech" className="bg-[#050505]">TECH</option>
+                                                </select>
+                                                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-cyan-400/40 text-[8px]">▼</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-4 pt-6 border-t border-white/5">
+                                        <button type="button" onClick={() => setShowAddModal(null)} className="flex-1 py-4 text-white/20 text-[10px] font-bold uppercase tracking-widest hover:text-white">Cancel</button>
+                                        <button type="submit" className="flex-1 py-4 bg-cyan-400 text-black font-bold text-[10px] rounded-2xl uppercase tracking-widest shadow-lg hover:bg-cyan-300 transition-all">Add Expense</button>
+                                    </div>
+                                </form>
+                            )}
+                        </GlassCard>
+                    </div>
+                )}
+
+                <main className="max-w-2xl mx-auto px-6 pt-10">
+                    <header className="flex justify-between items-start mb-12">
+                        <div className="animate-in fade-in slide-in-from-left duration-700">
+                            <h1 className="text-3xl font-extralight text-white leading-tight">Welcome back.</h1>
+                        </div>
+                        <button onClick={() => setShowSettings(true)} className="w-12 h-12 rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10 flex items-center justify-center text-cyan-400 hover:text-cyan-300 hover:border-cyan-400/50 transition-all shadow-xl active:scale-90">
+                            <Settings size={22} />
+                        </button>
+                    </header>
+
+                    {activeTab === 'home' && (
+                        <section className="flex flex-col items-center justify-center h-56 mb-12 relative animate-in fade-in duration-500">
+                            <div className="absolute inset-0 bg-cyan-400/5 blur-[120px] rounded-full pointer-events-none animate-pulse"></div>
+                            <JarvisOrb isListening={isListening} />
+                        </section>
+                    )}
+
+                    {renderContent()}
+                </main>
+
+                <NavigationBar onMicClick={toggleMic} isListening={isListening} activeTab={activeTab} onTabChange={setActiveTab} />
+            </div>
+        </AuthProvider>
     );
 };
 
