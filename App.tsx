@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   Settings, X, Plus, Trash2, CheckCircle2, 
-  Circle, Activity, Search, Bell, Shield, User, LogOut, Lock, Unlock, Loader2, BarChart2, ClipboardList, Mail, Send, DollarSign, CreditCard, TrendingDown, Edit2, Clock, Filter, Check, Cloud, Sparkles
+  Circle, Activity, Search, Bell, Shield, User, LogOut, Lock, Unlock, Loader2, BarChart2, ClipboardList, Mail, Send, DollarSign, CreditCard, TrendingDown, Edit2, Clock, Filter, Check, Cloud, Sparkles, Zap, Trophy, Target, PieChart, AlertTriangle, RefreshCcw
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import { INITIAL_STATE, PRIORITY_COLORS } from './constants.tsx';
-import { DashboardState, Task, Expense, PriorityLevel, ExpenseCategory, TaskType, PerformanceReport, NotificationSettings, NotificationLog } from './types.ts';
+import { DashboardState, Task, Expense, PriorityLevel, ExpenseCategory, TaskType, PerformanceReport, NotificationSettings, NotificationLog, ChatSession, Message } from './types.ts';
 import JarvisOrb from './components/JarvisOrb.tsx';
 import NavigationBar, { TabType } from './components/NavigationBar.tsx';
 import GlassCard from './components/GlassCard.tsx';
 import FinanceOverview from './components/FinanceOverview.tsx';
+import ChatInterface from './components/ChatInterface.tsx';
 import { GeminiVoiceService } from './services/geminiLive.ts';
 import { NotificationService } from './services/notificationService.ts';
 import { AuthProvider, useAuth } from './contexts/AuthContext.tsx';
@@ -24,18 +25,27 @@ const Dashboard: React.FC = () => {
     const [showAddModal, setShowAddModal] = useState<'task' | 'expense' | null>(null);
     const [performanceReport, setPerformanceReport] = useState<PerformanceReport | null>(null);
     const [isGeneratingReport, setIsGeneratingReport] = useState(false);
-    const [isEmailing, setIsEmailing] = useState(false);
-    const [isTestingEmail, setIsTestingEmail] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
     const [aiInsight, setAiInsight] = useState<string | null>(null);
     const [isInsightLoading, setIsInsightLoading] = useState(false);
     
+    // Search State
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchStatusFilter, setSearchStatusFilter] = useState<'All' | 'Pending' | 'Completed'>('All');
+
+    // Chat Session Management
+    const [chatSessions, setChatSessions] = useState<ChatSession[]>([
+        { id: 'default', title: 'New Conversation', messages: [], createdAt: new Date().toISOString() }
+    ]);
+    const [activeSessionId, setActiveSessionId] = useState<string>('default');
+
     // Filtering State
     const [priorityFilter, setPriorityFilter] = useState<'All' | PriorityLevel>('All');
     const [statusFilter, setStatusFilter] = useState<'All' | 'Pending' | 'Completed'>('All');
 
     // Voice & Diagnostic State
     const [isListening, setIsListening] = useState(false);
+    const [voiceError, setVoiceError] = useState<string | null>(null);
 
     // Email Security State
     const [isEmailLocked, setIsEmailLocked] = useState(true);
@@ -43,41 +53,69 @@ const Dashboard: React.FC = () => {
     const [unlockPassword, setUnlockPassword] = useState('');
     const [unlockError, setUnlockError] = useState<string | null>(null);
     const [tempEmail, setTempEmail] = useState('');
+    const [isTestingEmail, setIsTestingEmail] = useState(false);
     
     // Internal state management
     const [state, setState] = useState<DashboardState>(INITIAL_STATE);
     const [isLoaded, setIsLoaded] = useState(false);
 
+    // Refs for real-time data access during voice command chains
+    const tasksRef = useRef<Task[]>([]);
+    const expensesRef = useRef<Expense[]>([]);
+
     const voiceService = useRef<GeminiVoiceService | null>(null);
     const notificationService = useRef<NotificationService>(new NotificationService());
+
+    // Sync refs with state whenever state updates or loads
+    useEffect(() => {
+        tasksRef.current = state.tasks;
+    }, [state.tasks]);
+
+    useEffect(() => {
+        expensesRef.current = state.expenses;
+    }, [state.expenses]);
 
     // Initial Load: Local -> Cloud
     useEffect(() => {
         const loadPersistence = async () => {
             if (!user) return;
-            const storageKey = `arkos_db_${user.id}`;
-            const localSaved = localStorage.getItem(storageKey);
-            const cloudSaved = user.user_metadata?.arkos_state;
             
-            let finalState = INITIAL_STATE;
-            if (cloudSaved) {
-                finalState = cloudSaved;
-            } else if (localSaved) {
-                try {
-                    finalState = JSON.parse(localSaved);
-                } catch (e) {
-                    console.error("Local load failed", e);
+            try {
+                const storageKey = `arkos_db_${user.id}`;
+                const localSaved = localStorage.getItem(storageKey);
+                const cloudSaved = user.user_metadata?.arkos_state;
+                
+                let finalState = INITIAL_STATE;
+                
+                if (cloudSaved && typeof cloudSaved === 'object') {
+                    finalState = cloudSaved;
+                } else if (localSaved) {
+                    try {
+                        finalState = JSON.parse(localSaved);
+                    } catch (e) {
+                        console.error("Local load failed", e);
+                    }
                 }
-            }
 
-            setState({
-                ...INITIAL_STATE,
-                ...finalState,
-                tasks: Array.isArray(finalState.tasks) ? finalState.tasks : [],
-                expenses: Array.isArray(finalState.expenses) ? finalState.expenses : [],
-                notificationLogs: Array.isArray(finalState.notificationLogs) ? finalState.notificationLogs : []
-            });
-            setIsLoaded(true);
+                const loadedState = {
+                    ...INITIAL_STATE,
+                    ...finalState,
+                    tasks: Array.isArray(finalState.tasks) ? finalState.tasks : [],
+                    expenses: Array.isArray(finalState.expenses) ? finalState.expenses : [],
+                    notificationLogs: Array.isArray(finalState.notificationLogs) ? finalState.notificationLogs : []
+                };
+
+                setState(loadedState);
+                
+                // Initialize refs immediately upon load
+                tasksRef.current = loadedState.tasks;
+                expensesRef.current = loadedState.expenses;
+            } catch (err) {
+                console.error("Critical State Load Error", err);
+                // Fallback to initial state is already set by useState
+            } finally {
+                setIsLoaded(true);
+            }
         };
         loadPersistence();
     }, [user]);
@@ -89,9 +127,8 @@ const Dashboard: React.FC = () => {
         const syncData = async () => {
             setIsSyncing(true);
             const storageKey = `arkos_db_${user.id}`;
-            localStorage.setItem(storageKey, JSON.stringify(state));
-
             try {
+                localStorage.setItem(storageKey, JSON.stringify(state));
                 await supabase.auth.updateUser({
                     data: { arkos_state: state }
                 });
@@ -114,11 +151,12 @@ const Dashboard: React.FC = () => {
             const budgetData = `Spent: ${state.expenses.reduce((a, b) => a + b.amount, 0)}, Limit: ${state.budgetConfig.limit}`;
             
             const response = await ai.models.generateContent({
-                model: 'gemini-3-flash-lite-preview',
+                model: 'gemini-3-flash-preview',
                 contents: `Analyze my current state and give me one helpful sentence of advice. 
                 Tasks: ${taskData}. 
                 Budget: ${budgetData}. 
-                Be friendly and conversational.`
+                Be friendly and conversational.`,
+                config: { temperature: 0.7 }
             });
             setAiInsight(response.text || "You're doing great! Keep it up.");
         } catch (err) {
@@ -128,7 +166,198 @@ const Dashboard: React.FC = () => {
         }
     };
 
-    // Task Filtering Logic
+    const generatePerformanceReport = async () => {
+      setIsGeneratingReport(true);
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      try {
+        // Use Refs to ensure we capture tasks/expenses added milliseconds ago in the same voice turn
+        const currentTasks = tasksRef.current;
+        const currentExpenses = expensesRef.current;
+        
+        const dailyTasks = currentTasks.filter(t => t.type === 'Daily');
+        const completedTasks = dailyTasks.filter(t => t.completed);
+        const completedCount = completedTasks.length;
+        const total = dailyTasks.length;
+        const spent = currentExpenses.reduce((a, b) => a + b.amount, 0);
+        const budget = state.budgetConfig.limit;
+        
+        const completedTitles = completedTasks.map(t => t.title).join(', ');
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: `Act as a helpful personal assistant. 
+          Generate a daily summary report based on the following data.
+          
+          DATA:
+          - Completed Tasks: ${completedTitles || "None"}
+          - Progress: ${completedCount}/${total} tasks
+          - Spending: $${spent} / Budget: $${budget}
+          
+          INSTRUCTIONS:
+          1. Provide a 'Score' (0-100) based on productivity and budget.
+          2. Write a summary of what was done today.
+          3. Add a helpful insight for tomorrow.
+          
+          FORMATTING RULES:
+          - STRICTLY NO HASHTAGS (#). Do not use markdown headers.
+          - Use simple bullet points (•) for the summary list.
+          - Keep the language simple, friendly, and easy to read for a non-technical person.
+          - Do not use bold (**) or italics (*). Just plain text.
+          - Structure it clearly with line breaks.`,
+          config: { temperature: 0.5 }
+        });
+
+        const scoreMatch = response.text?.match(/(\d+)\/100/);
+        const calculatedScore = total > 0 ? Math.round((completedCount / total) * 100) : 0;
+        const score = scoreMatch ? parseInt(scoreMatch[1]) : calculatedScore;
+
+        setPerformanceReport({
+          summary: response.text || "Performance analysis complete.",
+          score: Math.min(100, Math.max(0, score)),
+          timestamp: new Date().toISOString()
+        });
+      } catch (err) {
+        console.error("Report generation failed", err);
+      } finally {
+        setIsGeneratingReport(false);
+      }
+    };
+
+    const addTask = useCallback((title: string, priority: PriorityLevel, target: TaskType = 'Daily', completed: boolean = false, startTime: string, endTime: string, isRecurring: boolean = false) => {
+        const now = Date.now();
+        const newTask: Task = {
+            id: now.toString(),
+            title,
+            startTime: startTime || new Date(now).toISOString(),
+            endTime: endTime || new Date(now + 3600000).toISOString(),
+            priority,
+            completed: completed,
+            type: target,
+            recurring: isRecurring,
+            lastNotifiedMilestone: null,
+            lastCompletedDate: completed ? new Date().toISOString().split('T')[0] : undefined
+        };
+        
+        // Optimistically update ref so subsequent sync calls (like generateReport) see it immediately
+        tasksRef.current = [newTask, ...tasksRef.current];
+        setState(prev => ({ ...prev, tasks: [newTask, ...prev.tasks] }));
+        setShowAddModal(null);
+    }, []);
+
+    const addExpense = useCallback((label: string, amount: number, category: ExpenseCategory) => {
+        const newExpense: Expense = {
+            id: Date.now().toString(),
+            label,
+            amount,
+            category,
+            date: new Date().toISOString()
+        };
+        
+        // Optimistically update ref
+        expensesRef.current = [newExpense, ...expensesRef.current];
+        setState(prev => ({ ...prev, expenses: [newExpense, ...prev.expenses] }));
+        setShowAddModal(null);
+    }, []);
+
+    // Session Management Functions
+    const createNewSession = () => {
+        const newSession: ChatSession = {
+            id: Date.now().toString(),
+            title: 'New Conversation',
+            messages: [],
+            createdAt: new Date().toISOString()
+        };
+        setChatSessions(prev => [newSession, ...prev]);
+        setActiveSessionId(newSession.id);
+    };
+
+    const deleteSession = (sessionId: string) => {
+        const updatedSessions = chatSessions.filter(s => s.id !== sessionId);
+        
+        if (updatedSessions.length === 0) {
+            // Reset to clean state if user deletes the last session
+            const newSession = { id: Date.now().toString(), title: 'New Conversation', messages: [], createdAt: new Date().toISOString() };
+            setChatSessions([newSession]);
+            setActiveSessionId(newSession.id);
+        } else {
+            setChatSessions(updatedSessions);
+            // If the deleted session was the active one, switch to the first available one
+            if (activeSessionId === sessionId) {
+                setActiveSessionId(updatedSessions[0].id);
+            }
+        }
+    };
+
+    const updateSessionMessages = (messages: Message[]) => {
+        setChatSessions(prev => prev.map(session => {
+            if (session.id === activeSessionId) {
+                // Auto-generate title from first user message if it's "New Conversation"
+                let title = session.title;
+                if (session.messages.length === 0 && messages.length > 0 && messages[0].role === 'user') {
+                    title = messages[0].text.slice(0, 30) + (messages[0].text.length > 30 ? '...' : '');
+                }
+                return { ...session, title, messages };
+            }
+            return session;
+        }));
+    };
+
+    const resetDailyTasks = () => {
+        if (window.confirm("Start a new day? This will reset all daily tasks to pending.")) {
+             setState(prev => ({
+                ...prev,
+                tasks: prev.tasks.map(t => 
+                    t.type === 'Daily' ? { ...t, completed: false, lastCompletedDate: undefined } : t
+                )
+            }));
+        }
+    };
+
+    const toggleMic = async () => {
+        if (isListening) {
+            voiceService.current?.stop();
+            setIsListening(false);
+        } else {
+            setVoiceError(null);
+            try {
+                setIsListening(true);
+                await voiceService.current?.start(state, {
+                    onAddTask: (title, p, t, completed, start, end) => addTask(title, p, t, completed, start || "", end || ""),
+                    onAddExpense: (label, amount, category) => addExpense(label, amount, category),
+                    onGenerateReport: () => generatePerformanceReport(),
+                    onTranscript: (role, text) => {
+                        // Add voice transcripts to the ACTIVE session
+                        setChatSessions(prev => prev.map(session => {
+                            if (session.id === activeSessionId) {
+                                return {
+                                    ...session,
+                                    messages: [...session.messages, {
+                                        id: Date.now().toString() + Math.random(),
+                                        role: role,
+                                        text: text,
+                                        timestamp: new Date()
+                                    }]
+                                };
+                            }
+                            return session;
+                        }));
+                    },
+                    onError: (msg) => {
+                        setVoiceError(msg);
+                        setIsListening(false);
+                    },
+                    onDisconnect: () => {
+                        setIsListening(false);
+                    }
+                });
+            } catch (err: any) {
+                setIsListening(false);
+                setVoiceError(err.message || "Voice system initialization failed.");
+            }
+        }
+    };
+
+    // Task Filtering Logic for Main View
     const filteredTasks = useMemo(() => {
         return state.tasks.filter(t => {
             const matchesType = t.type === taskTab;
@@ -139,6 +368,26 @@ const Dashboard: React.FC = () => {
             return matchesType && matchesPriority && matchesStatus;
         });
     }, [state.tasks, taskTab, priorityFilter, statusFilter]);
+    
+    // Search Filtering Logic
+    const searchResults = useMemo(() => {
+        if (!searchQuery.trim()) return [];
+        const lowerQuery = searchQuery.toLowerCase();
+        
+        let results = state.tasks.filter(t => 
+            t.title.toLowerCase().includes(lowerQuery) ||
+            t.priority.toLowerCase().includes(lowerQuery) ||
+            t.type.toLowerCase().includes(lowerQuery)
+        );
+
+        if (searchStatusFilter === 'Pending') {
+            results = results.filter(t => !t.completed);
+        } else if (searchStatusFilter === 'Completed') {
+            results = results.filter(t => t.completed);
+        }
+
+        return results;
+    }, [state.tasks, searchQuery, searchStatusFilter]);
 
     const nextTask = useMemo(() => {
         const pending = state.tasks
@@ -162,6 +411,8 @@ const Dashboard: React.FC = () => {
         if (hours > 0) return `Starts in ${hours}h`;
         return "Starts soon";
     };
+
+    const totalSpent = state.expenses.reduce((acc, curr) => acc + curr.amount, 0);
 
     useEffect(() => {
         setTempEmail(state.notificationSettings.operatorEmail || user?.email || '');
@@ -252,62 +503,96 @@ const Dashboard: React.FC = () => {
         }
     };
 
-    const addTask = useCallback((title: string, priority: PriorityLevel, target: TaskType = 'Daily', startTime: string, endTime: string, isRecurring: boolean = false) => {
-        const now = Date.now();
-        const newTask: Task = {
-            id: now.toString(),
-            title,
-            startTime: startTime || new Date(now).toISOString(),
-            endTime: endTime || new Date(now + 3600000).toISOString(),
-            priority,
-            completed: false,
-            type: target,
-            recurring: isRecurring,
-            lastNotifiedMilestone: null
-        };
-        setState(prev => ({ ...prev, tasks: [newTask, ...prev.tasks] }));
-        setShowAddModal(null);
-    }, []);
-
-    const addExpense = useCallback((label: string, amount: number, category: ExpenseCategory) => {
-        const newExpense: Expense = {
-            id: Date.now().toString(),
-            label,
-            amount,
-            category,
-            date: new Date().toISOString()
-        };
-        setState(prev => ({ ...prev, expenses: [newExpense, ...prev.expenses] }));
-        setShowAddModal(null);
-    }, []);
-
-    const toggleMic = async () => {
-        if (isListening) {
-            voiceService.current?.stop();
-            setIsListening(false);
-        } else {
-            try {
-                setIsListening(true);
-                await voiceService.current?.start(state, {
-                    onAddTask: (title, priority, target, start, end) => addTask(title, priority, target, start || "", end || ""),
-                    onAddExpense: (label, amount, category) => addExpense(label, amount, category),
-                });
-            } catch (err: any) {
-                setIsListening(false);
-            }
-        }
-    };
-
-    const totalSpent = state.expenses.reduce((acc, curr) => acc + curr.amount, 0);
-
     const renderContent = () => {
         switch (activeTab) {
+            case 'chat':
+                return (
+                    <section className="h-[calc(100vh-180px)]">
+                        <ChatInterface 
+                            dashboardState={state} 
+                            sessions={chatSessions}
+                            activeSessionId={activeSessionId}
+                            onSessionChange={setActiveSessionId}
+                            onCreateSession={createNewSession}
+                            onDeleteSession={deleteSession}
+                            onUpdateMessages={updateSessionMessages}
+                            isListening={isListening}
+                            onMicClick={toggleMic}
+                        />
+                    </section>
+                );
             case 'search':
                 return (
-                    <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                        <div className="relative mb-8">
+                    <section className="animate-in fade-in slide-in-from-bottom-4 duration-500 min-h-[60vh]">
+                        <div className="relative mb-4">
                             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-cyan-400" size={18} />
-                            <input autoFocus type="text" placeholder="Search tasks..." className="w-full bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-white focus:outline-none focus:border-cyan-400/50 transition-all placeholder:text-white/20" />
+                            <input 
+                                autoFocus 
+                                type="text" 
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="Search tasks..." 
+                                className="w-full bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl py-4 pl-12 pr-10 text-white focus:outline-none focus:border-cyan-400/50 transition-all placeholder:text-white/20" 
+                            />
+                            {searchQuery && (
+                                <button 
+                                    onClick={() => setSearchQuery('')}
+                                    className="absolute right-4 top-1/2 -translate-y-1/2 text-white/20 hover:text-white transition-colors"
+                                >
+                                    <X size={16} />
+                                </button>
+                            )}
+                        </div>
+
+                        {searchQuery && (
+                            <div className="flex gap-2 mb-6 overflow-x-auto pb-2 scrollbar-hide">
+                                {(['All', 'Pending', 'Completed'] as const).map(filter => (
+                                    <button
+                                        key={filter}
+                                        onClick={() => setSearchStatusFilter(filter)}
+                                        className={`px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest border transition-all whitespace-nowrap ${
+                                            searchStatusFilter === filter 
+                                            ? 'bg-cyan-400/20 border-cyan-400 text-cyan-400' 
+                                            : 'bg-white/5 border-white/10 text-white/30 hover:bg-white/10'
+                                        }`}
+                                    >
+                                        {filter}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                        
+                        <div className="space-y-3 pb-8">
+                            {searchResults.map(task => (
+                                <GlassCard key={task.id} className="py-4 px-5 flex items-center gap-4 border-white/5 hover:border-cyan-400/20 group">
+                                    <button onClick={() => setState(s => ({ ...s, tasks: s.tasks.map(t => t.id === task.id ? { ...t, completed: !t.completed, lastCompletedDate: !t.completed ? new Date().toISOString().split('T')[0] : undefined } : t) }))} className="transition-all active:scale-90">
+                                        <div className={`p-2 rounded-full transition-colors ${task.completed ? 'bg-green-500/10 text-green-500' : 'bg-white/5 text-white/20 group-hover:text-cyan-400'}`}>
+                                            {task.completed ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+                                        </div>
+                                    </button>
+                                    <div className="flex-1 min-w-0">
+                                        <h4 className={`text-sm font-bold ${task.completed ? 'text-white/30 line-through' : 'text-white'}`}>{task.title}</h4>
+                                        <div className="flex items-center gap-2 mt-1">
+                                            <span className="text-[9px] font-bold uppercase tracking-wider text-white/40">{task.priority}</span>
+                                            <span className="text-[9px] text-white/20">•</span>
+                                            <span className="text-[9px] font-mono text-white/30">{new Date(task.startTime).toLocaleDateString()}</span>
+                                            <span className="text-[9px] text-white/20">•</span>
+                                            <span className="text-[9px] font-bold uppercase tracking-widest text-cyan-400/60">{task.type}</span>
+                                        </div>
+                                    </div>
+                                </GlassCard>
+                            ))}
+                            {searchQuery && searchResults.length === 0 && (
+                                <div className="text-center py-10 flex flex-col items-center opacity-30">
+                                    <Search size={32} className="mb-2" />
+                                    <span className="text-xs font-mono uppercase tracking-widest">No matching tasks found</span>
+                                </div>
+                            )}
+                            {!searchQuery && (
+                                <div className="text-center py-10 opacity-20">
+                                    <span className="text-[10px] font-mono uppercase tracking-widest">Type to search archives...</span>
+                                </div>
+                            )}
                         </div>
                     </section>
                 );
@@ -365,8 +650,20 @@ const Dashboard: React.FC = () => {
                                 )}
                             </GlassCard>
 
-                            <GlassCard className="flex flex-col justify-between h-32">
-                                <span className="text-[9px] font-bold text-white/30 tracking-[0.1em] uppercase">Daily Progress</span>
+                            <GlassCard className="flex flex-col justify-between h-32 relative group">
+                                <div className="flex justify-between items-start">
+                                    <span className="text-[9px] font-bold text-white/30 tracking-[0.1em] uppercase">Daily Progress</span>
+                                    <button 
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            resetDailyTasks();
+                                        }}
+                                        className="text-white/20 hover:text-cyan-400 transition-colors opacity-0 group-hover:opacity-100 p-1"
+                                        title="Start New Day (Reset)"
+                                    >
+                                        <RefreshCcw size={12} />
+                                    </button>
+                                </div>
                                 <h2 className="text-2xl font-bold text-white tabular-nums">
                                     {state.tasks.filter(t => t.type === 'Daily' && t.completed).length}<span className="text-white/20 mx-1">/</span>{state.tasks.filter(t => t.type === 'Daily').length}
                                 </h2>
@@ -384,11 +681,15 @@ const Dashboard: React.FC = () => {
                         </div>
 
                         {/* Smart Advice Section */}
-                        <GlassCard className="border-cyan-400/20 bg-cyan-400/5">
+                        <GlassCard className="border-cyan-400/20 bg-cyan-400/5 overflow-visible">
                             <div className="flex justify-between items-center mb-3">
                                 <div className="flex items-center gap-2">
                                     <Sparkles size={16} className="text-cyan-400" />
                                     <span className="text-[10px] font-bold text-white/60 tracking-widest uppercase">Smart Advice</span>
+                                    <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-cyan-400/10 border border-cyan-400/20 ml-1 animate-pulse">
+                                        <Zap size={8} className="text-cyan-400 fill-cyan-400" />
+                                        <span className="text-[7px] font-bold text-cyan-400 uppercase tracking-tighter">Flash Engine</span>
+                                    </div>
                                 </div>
                                 <button 
                                     onClick={getAiInsight} 
@@ -412,6 +713,10 @@ const Dashboard: React.FC = () => {
                                         <button onClick={() => setTaskTab('Main')} className={`text-[11px] font-bold tracking-widest uppercase transition-all pb-1 border-b ${taskTab === 'Main' ? 'text-cyan-400 border-cyan-400' : 'text-white/20 border-transparent hover:text-white/40'}`}>All Tasks</button>
                                     </div>
                                     <div className="flex gap-2.5">
+                                        <button onClick={generatePerformanceReport} disabled={isGeneratingReport} className="text-cyan-400 p-2.5 bg-cyan-400/5 border border-cyan-400/20 rounded-xl hover:bg-cyan-400/15 transition-all shadow-lg flex items-center gap-2">
+                                          {isGeneratingReport ? <Loader2 size={16} className="animate-spin" /> : <BarChart2 size={16} />}
+                                          <span className="text-[9px] font-bold uppercase tracking-widest hidden sm:inline">Report</span>
+                                        </button>
                                         <button onClick={() => setShowAddModal('task')} className="text-cyan-400 p-2.5 bg-cyan-400/5 backdrop-blur-xl border border-cyan-400/20 rounded-xl hover:bg-cyan-400/15 transition-all active:scale-90 shadow-lg"><Plus size={18} /></button>
                                     </div>
                                 </div>
@@ -508,27 +813,94 @@ const Dashboard: React.FC = () => {
         <div className="min-h-screen relative pb-32">
             <div className="fixed top-0 left-0 w-full h-full bg-[#050505] -z-10" />
             
-            {/* Unlock Password Modal */}
-            {showUnlockModal && (
-              <div className="fixed inset-0 z-[300] flex items-center justify-center p-6 bg-black/95 backdrop-blur-3xl animate-in fade-in duration-500">
-                <GlassCard className="w-full max-sm p-10 border-cyan-500/40">
-                  <div className="flex flex-col items-center mb-8">
-                    <Shield className="text-cyan-400 mb-6" size={40} />
-                    <h2 className="text-xl font-bold text-white uppercase tracking-widest">Security Check</h2>
-                    <p className="text-[10px] text-white/30 uppercase mt-3 tracking-widest">Verify password to edit settings</p>
-                  </div>
-                  <form onSubmit={handleUnlockEmail} className="space-y-5">
-                    <input autoFocus type="password" value={unlockPassword} onChange={(e) => setUnlockPassword(e.target.value)} placeholder="ENTER PASSWORD..." className="w-full bg-white/5 backdrop-blur-xl border border-white/10 p-5 rounded-2xl text-white text-sm outline-none focus:border-cyan-400/50 transition-all" />
-                    {unlockError && <p className="text-[10px] text-red-500 font-bold uppercase text-center">{unlockError}</p>}
-                    <div className="flex gap-4 pt-2">
-                      <button type="button" onClick={() => setShowUnlockModal(false)} className="flex-1 py-4 text-white/30 text-[10px] font-bold uppercase tracking-widest hover:text-white">Cancel</button>
-                      <button type="submit" className="flex-1 py-4 bg-cyan-400 text-black text-[10px] font-bold rounded-2xl uppercase tracking-widest shadow-lg hover:bg-cyan-300">Verify</button>
+            {voiceError && (
+                <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[150] w-[90%] max-w-md animate-in fade-in slide-in-from-top-4 duration-500">
+                    <GlassCard className="border-red-500/50 bg-red-900/20 flex items-start gap-4 p-5 shadow-[0_0_50px_rgba(220,38,38,0.2)] backdrop-blur-2xl">
+                        <div className="p-2 bg-red-500/20 rounded-xl mt-0.5">
+                            <AlertTriangle className="text-red-500" size={20} />
+                        </div>
+                        <div className="flex-1">
+                            <h4 className="text-[10px] font-bold text-red-500 uppercase tracking-[0.2em] mb-1.5">System Alert</h4>
+                            <p className="text-xs font-medium text-red-200/90 leading-relaxed font-mono">{voiceError}</p>
+                        </div>
+                        <button onClick={() => setVoiceError(null)} className="text-red-500/50 hover:text-red-500 transition-colors p-1">
+                            <X size={18} />
+                        </button>
+                    </GlassCard>
+                </div>
+            )}
+
+            {/* Performance Report Modal */}
+            {performanceReport && (
+              <div className="fixed inset-0 z-[400] flex items-center justify-center p-6 bg-black/90 backdrop-blur-3xl animate-in fade-in zoom-in-95 duration-500">
+                <GlassCard className="w-full max-w-xl p-10 border-cyan-500/40 shadow-[0_0_50px_rgba(6,182,212,0.1)]">
+                  <div className="flex justify-between items-start mb-10">
+                    <div className="flex items-center gap-4">
+                      <div className="w-14 h-14 rounded-2xl bg-cyan-400/10 border border-cyan-400/30 flex items-center justify-center">
+                        <Trophy className="text-cyan-400" size={28} />
+                      </div>
+                      <div>
+                        <h2 className="text-2xl font-bold text-white uppercase tracking-widest">Mission Briefing</h2>
+                        <p className="text-[9px] text-white/30 uppercase tracking-[0.3em] mt-1">Daily Performance Analysis</p>
+                      </div>
                     </div>
-                  </form>
+                    <button onClick={() => setPerformanceReport(null)} className="p-3 text-white/20 hover:text-white transition-all"><X size={24} /></button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
+                    <div className="flex flex-col items-center justify-center p-8 rounded-3xl bg-white/[0.02] border border-white/5 relative overflow-hidden group">
+                      <div className="absolute inset-0 bg-cyan-400/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <div className="relative z-10 text-center">
+                        <span className="text-[10px] font-bold text-white/20 uppercase tracking-[0.3em] block mb-4">Overall Score</span>
+                        <div className="text-6xl font-black text-cyan-400 tabular-nums mb-2">{performanceReport.score}</div>
+                        <div className="w-full h-1 bg-white/5 rounded-full mt-4">
+                          <div className="h-full bg-cyan-400 rounded-full shadow-[0_0_10px_rgba(6,182,212,0.5)] transition-all duration-1000" style={{ width: `${performanceReport.score}%` }} />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="space-y-4">
+                      <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/5 flex items-center gap-4">
+                        <Target className="text-cyan-400" size={20} />
+                        <div>
+                          <div className="text-[10px] font-bold text-white/20 uppercase">Completed</div>
+                          <div className="text-xl font-bold text-white tabular-nums">
+                            {state.tasks.filter(t => t.type === 'Daily' && t.completed).length} / {state.tasks.filter(t => t.type === 'Daily').length}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="p-4 rounded-2xl bg-white/[0.02] border border-white/5 flex items-center gap-4">
+                        <PieChart className="text-cyan-400" size={20} />
+                        <div>
+                          <div className="text-[10px] font-bold text-white/20 uppercase">Efficiency</div>
+                          <div className="text-xl font-bold text-white tabular-nums">
+                            {Math.round((state.tasks.filter(t => t.type === 'Daily' && t.completed).length / (state.tasks.filter(t => t.type === 'Daily').length || 1)) * 100)}%
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-6 rounded-3xl bg-black/40 border border-white/5 shadow-inner">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Sparkles size={14} className="text-cyan-400" />
+                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">AI Qualitative Analysis</span>
+                    </div>
+                    <p className="text-sm text-white/70 leading-relaxed font-medium whitespace-pre-line">
+                      {performanceReport.summary}
+                    </p>
+                  </div>
+
+                  <button 
+                    onClick={() => setPerformanceReport(null)}
+                    className="w-full mt-10 py-5 bg-cyan-400 text-black font-bold uppercase tracking-widest rounded-2xl hover:bg-cyan-300 transition-all shadow-lg active:scale-95"
+                  >
+                    Acknowledge
+                  </button>
                 </GlassCard>
               </div>
             )}
 
+            {/* Existing Settings & Add Modals... */}
             {showSettings && (
                 <div className="fixed inset-0 z-[120] flex items-center justify-center p-6 bg-black/80 backdrop-blur-2xl animate-in fade-in duration-500">
                     <GlassCard className="w-full max-lg p-10 relative max-h-[90vh] overflow-y-auto border-cyan-400/20 shadow-2xl">
@@ -602,6 +974,7 @@ const Dashboard: React.FC = () => {
                                     formData.get('title') as string, 
                                     formData.get('priority') as PriorityLevel, 
                                     formData.get('target') as TaskType, 
+                                    false,
                                     formData.get('startTime') as string,
                                     formData.get('endTime') as string,
                                     formData.get('recurring') === 'on'
@@ -707,10 +1080,13 @@ const Dashboard: React.FC = () => {
                     </button>
                 </header>
 
-                <section className="flex flex-col items-center justify-center h-56 mb-12 relative">
-                    <div className="absolute inset-0 bg-cyan-400/5 blur-[120px] rounded-full pointer-events-none animate-pulse"></div>
-                    <JarvisOrb isListening={isListening} />
-                </section>
+                {activeTab === 'home' && (
+                    <section className="flex flex-col items-center justify-center h-56 mb-12 relative animate-in fade-in duration-500">
+                        <div className="absolute inset-0 bg-cyan-400/5 blur-[120px] rounded-full pointer-events-none animate-pulse"></div>
+                        <JarvisOrb isListening={isListening} />
+                    </section>
+                )}
+
                 {renderContent()}
             </main>
 

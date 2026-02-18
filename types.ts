@@ -45,6 +45,21 @@ export interface NotificationLog {
   status: 'Dispatched' | 'Failed';
 }
 
+export interface Message {
+  id: string;
+  role: 'user' | 'model';
+  text: string;
+  timestamp: Date;
+  image?: string; // base64
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  messages: Message[];
+  createdAt: string; // ISO string
+}
+
 export interface DashboardState {
   tasks: Task[];
   expenses: Expense[];

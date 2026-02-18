@@ -1,8 +1,8 @@
 
 import React from 'react';
-import { Home, Search, Bell, User } from 'lucide-react';
+import { Home, Search, Bell, User, MessageSquare } from 'lucide-react';
 
-export type TabType = 'home' | 'search' | 'notifications';
+export type TabType = 'home' | 'chat' | 'search' | 'notifications';
 
 interface NavigationBarProps {
   onMicClick: () => void;
@@ -25,12 +25,12 @@ const NavigationBar: React.FC<NavigationBarProps> = ({
       >
         <Home size={22} />
       </button>
-      
+
       <button 
-        onClick={() => onTabChange('search')}
-        className={`p-2 rounded-full transition-all duration-300 ${activeTab === 'search' ? 'text-cyan-400 bg-cyan-400/10' : 'text-white/40 hover:text-white/70 hover:bg-white/5'}`}
+        onClick={() => onTabChange('chat')}
+        className={`p-2 rounded-full transition-all duration-300 ${activeTab === 'chat' ? 'text-cyan-400 bg-cyan-400/10' : 'text-white/40 hover:text-white/70 hover:bg-white/5'}`}
       >
-        <Search size={22} />
+        <MessageSquare size={22} />
       </button>
 
       {/* Center Mic Button */}
@@ -49,15 +49,18 @@ const NavigationBar: React.FC<NavigationBarProps> = ({
       </div>
 
       <button 
+        onClick={() => onTabChange('search')}
+        className={`p-2 rounded-full transition-all duration-300 ${activeTab === 'search' ? 'text-cyan-400 bg-cyan-400/10' : 'text-white/40 hover:text-white/70 hover:bg-white/5'}`}
+      >
+        <Search size={22} />
+      </button>
+      
+      <button 
         onClick={() => onTabChange('notifications')}
         className={`p-2 rounded-full transition-all duration-300 ${activeTab === 'notifications' ? 'text-cyan-400 bg-cyan-400/10' : 'text-white/40 hover:text-white/70 hover:bg-white/5'}`}
       >
         <Bell size={22} />
       </button>
-
-      <div className="w-8 h-8 rounded-full bg-white/10 border border-white/20 flex items-center justify-center overflow-hidden transition-colors hover:border-cyan-400/50">
-        <User size={16} className="text-white/40" />
-      </div>
     </nav>
   );
 };

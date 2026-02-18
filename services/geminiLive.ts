@@ -4,10 +4,13 @@ import { DashboardState, PriorityLevel, ExpenseCategory, TaskType } from '../typ
 
 export interface VoiceActionCallbacks {
   onMessage?: (text: string) => void;
-  onAddTask?: (title: string, priority: PriorityLevel, target: TaskType, startTime?: string, endTime?: string) => void;
+  onAddTask?: (title: string, priority: PriorityLevel, target: TaskType, completed: boolean, startTime?: string, endTime?: string) => void;
   onAddExpense?: (label: string, amount: number, category: ExpenseCategory) => void;
   onGenerateReport?: () => void;
   onDispatchEmail?: () => void;
+  onTranscript?: (role: 'user' | 'model', text: string) => void;
+  onError?: (error: string) => void;
+  onDisconnect?: () => void;
 }
 
 const addTaskTool: FunctionDeclaration = {
@@ -26,6 +29,10 @@ const addTaskTool: FunctionDeclaration = {
         type: Type.STRING,
         description: 'Where to put the task (Daily list or General list).',
         enum: ['Main', 'Daily']
+      },
+      completed: {
+        type: Type.BOOLEAN,
+        description: 'Whether the task is already finished. Set to true if the user says they "completed" or "finished" something they are just now adding.'
       },
       startTime: {
         type: Type.STRING,
@@ -53,7 +60,7 @@ const generateReportTool: FunctionDeclaration = {
   name: 'generateDailyReport',
   parameters: {
     type: Type.OBJECT,
-    description: 'Show a summary report of today\'s progress on screen.',
+    description: 'Generate and display a visual performance report for today.',
     properties: {},
   },
 };
@@ -67,6 +74,10 @@ export class GeminiVoiceService {
   private sources = new Set<AudioBufferSourceNode>();
   private active = false;
   private stream: MediaStream | null = null;
+  
+  // Transcription State
+  private currentInputTranscription = '';
+  private currentOutputTranscription = '';
 
   constructor() {}
 
@@ -76,12 +87,12 @@ export class GeminiVoiceService {
 
     try {
       const apiKey = process.env.API_KEY;
-      if (!apiKey) throw new Error("API Key configuration error.");
+      if (!apiKey) throw new Error("Security Protocol Error: API Key missing.");
 
       this.ai = new GoogleGenAI({ apiKey });
       
       const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
-      if (!AudioContextClass) throw new Error("Your browser does not support audio features.");
+      if (!AudioContextClass) throw new Error("Hardware Compatibility Error: Audio system unavailable.");
 
       this.inputAudioContext = new AudioContextClass({ sampleRate: 16000 });
       this.outputAudioContext = new AudioContextClass({ sampleRate: 24000 });
@@ -89,32 +100,31 @@ export class GeminiVoiceService {
       await this.inputAudioContext.resume();
       await this.outputAudioContext.resume();
 
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      try {
+        this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        throw new Error("Access Denied: Microphone permissions required.");
+      }
 
       const dailyTasks = context.tasks.filter(t => t.type === 'Daily');
       const completedDaily = dailyTasks.filter(t => t.completed).length;
       
-      const systemInstruction = `You are a highly intelligent, versatile personal assistant. 
+      const systemInstruction = `You are the core intelligence ("The Brain") of a high-tech personal dashboard. 
       
-      CORE MISSION: 
-      1. GENERAL INTELLIGENCE: You are a general-purpose AI. You can discuss any topic—history, science, cooking, coding, or life advice.
-      2. DASHBOARD MANAGEMENT: You manage the user's schedule and budget.
+      CORE MISSION:
+      - You process voice commands to manage the user's life.
+      - You can handle complex, multi-step requests. Example: "Add meeting at 2, coffee at 3, I already finished the meeting, now show me my report."
       
-      NOTIFICATION RULES YOU SHOULD KNOW:
-      If a user asks when they will be reminded:
-      - Low Priority: 24 hours and 1 hour before start.
-      - Standard Priority: 24h, 6h, and 2h before start.
-      - Critical Priority: 24h, 12h, 6h, 2h, and 1h before start.
-      
-      CONTEXT:
-      - The user has ${dailyTasks.length} tasks today, with ${completedDaily} completed.
+      SPECIFIC LOGIC FOR MULTI-REQUESTS:
+      1. ADDING TASKS: If a user mentions things they did but weren't on the list, call 'addTask' for each one and set 'completed: true'.
+      2. SEQUENCING: If the user asks for a report after adding tasks, call 'generateDailyReport' LAST in your sequence of tool calls.
+      3. BRAIN POWER: You have full access to current context: ${dailyTasks.length} tasks today, ${completedDaily} completed.
       
       TOOLS:
-      - Use 'addTask' to create tasks.
-      - Use 'emailBriefing' for email summaries.
-      - Use 'generateDailyReport' for on-screen summaries.
+      - Use 'addTask' for any new item.
+      - Use 'generateDailyReport' to show the visual summary modal on the screen.
       
-      TONE: Helpful, conversational, and direct. Avoid tech jargon like "protocol" or "telemetry".`;
+      TONE: Professional, efficient, and proactive. Respond with a confirmation of what you've done (e.g., "Tasks added and your report is ready.")`;
 
       this.sessionPromise = this.ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
@@ -136,13 +146,32 @@ export class GeminiVoiceService {
             source.connect(scriptProcessor);
             scriptProcessor.connect(this.inputAudioContext.destination);
 
-            // Trigger an initial greeting from the model
             this.sessionPromise?.then((session) => {
-              session.sendRealtimeInput([{ text: "Hello! Please provide a brief, friendly greeting to the user and ask how you can help them today." }]);
+              session.sendRealtimeInput([{ text: "System connection established. Greet the user concisely and let them know you are ready to manage their dashboard." }]);
             });
           },
           onmessage: async (message: LiveServerMessage) => {
             if (!this.active) return;
+
+            // Handle Transcriptions
+            if (message.serverContent?.outputTranscription) {
+                const text = message.serverContent.outputTranscription.text;
+                this.currentOutputTranscription += text;
+            } else if (message.serverContent?.inputTranscription) {
+                const text = message.serverContent.inputTranscription.text;
+                this.currentInputTranscription += text;
+            }
+
+            if (message.serverContent?.turnComplete) {
+                if (this.currentInputTranscription.trim()) {
+                    callbacks.onTranscript?.('user', this.currentInputTranscription);
+                    this.currentInputTranscription = '';
+                }
+                if (this.currentOutputTranscription.trim()) {
+                    callbacks.onTranscript?.('model', this.currentOutputTranscription);
+                    this.currentOutputTranscription = '';
+                }
+            }
 
             if (message.toolCall) {
               for (const fc of message.toolCall.functionCalls) {
@@ -151,16 +180,17 @@ export class GeminiVoiceService {
                   const title = String(fc.args.title || "New Task");
                   const priority = (fc.args.priority as PriorityLevel) || 'Standard';
                   const target = (fc.args.target as TaskType) || 'Daily';
+                  const completed = Boolean(fc.args.completed || false);
                   const start = String(fc.args.startTime || "");
                   const end = String(fc.args.endTime || "");
-                  callbacks.onAddTask?.(title, priority, target, start, end);
-                  executionResult = `Task added: ${title}.`;
+                  callbacks.onAddTask?.(title, priority, target, completed, start, end);
+                  executionResult = `Task "${title}" ${completed ? 'completed' : 'added'}.`;
+                } else if (fc.name === 'generateDailyReport') {
+                  callbacks.onGenerateReport?.();
+                  executionResult = `Report generated and displayed.`;
                 } else if (fc.name === 'emailBriefing') {
                   callbacks.onDispatchEmail?.();
                   executionResult = `Email sent.`;
-                } else if (fc.name === 'generateDailyReport') {
-                  callbacks.onGenerateReport?.();
-                  executionResult = `Report generated.`;
                 }
                 
                 this.sessionPromise?.then((session) => {
@@ -169,10 +199,6 @@ export class GeminiVoiceService {
                   });
                 }).catch(() => {});
               }
-            }
-
-            if (message.serverContent?.outputTranscription) {
-              callbacks.onMessage?.(message.serverContent.outputTranscription.text);
             }
 
             if (this.outputAudioContext && this.outputAudioContext.state !== 'closed' && this.active) {
@@ -198,8 +224,12 @@ export class GeminiVoiceService {
           onerror: (e) => {
             console.error("Live session error", e);
             this.stop();
+            callbacks.onError?.("Neural Link disrupted. Re-calibration recommended.");
           },
-          onclose: () => this.stop(),
+          onclose: (e) => {
+            this.stop();
+            callbacks.onDisconnect?.();
+          },
         },
         config: {
           responseModalities: [Modality.AUDIO],

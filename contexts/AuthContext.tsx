@@ -28,33 +28,63 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [needsPasswordReset, setNeedsPasswordReset] = useState(false);
 
     useEffect(() => {
-        // Check active sessions and sets the user
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            setSession(session);
-            setUser(session?.user ?? null);
-            setLoading(false);
-        }).catch(err => {
-            console.error("Auth initialization error", err);
-            setLoading(false);
-        });
+        let mounted = true;
 
-        // Listen for changes on auth state
+        const initAuth = async () => {
+            try {
+                const { data: { session } } = await supabase.auth.getSession();
+                if (mounted) {
+                    setSession(session);
+                    setUser(session?.user ?? null);
+                }
+            } catch (err) {
+                console.error("Auth initialization error", err);
+            } finally {
+                if (mounted) setLoading(false);
+            }
+        };
+
+        initAuth();
+        
+        // Failsafe: If Supabase takes too long, stop loading so the UI doesn't freeze.
+        const failsafeTimer = setTimeout(() => {
+            if (mounted && loading) {
+                console.warn("Auth initialization timed out, releasing loading state.");
+                setLoading(false);
+            }
+        }, 3000);
+
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-            setSession(session);
-            setUser(session?.user ?? null);
-            setLoading(false);
+            if (mounted) {
+                setSession(session);
+                setUser(session?.user ?? null);
+                setLoading(false);
+            }
 
             if (event === 'PASSWORD_RECOVERY') {
-                setNeedsPasswordReset(true);
+                if (mounted) setNeedsPasswordReset(true);
             }
         });
 
-        return () => subscription.unsubscribe();
+        return () => {
+            mounted = false;
+            clearTimeout(failsafeTimer);
+            subscription.unsubscribe();
+        };
     }, []);
 
     const signOut = async () => {
-        await supabase.auth.signOut();
-        setNeedsPasswordReset(false);
+        try {
+            await supabase.auth.signOut();
+            setNeedsPasswordReset(false);
+            setUser(null);
+            setSession(null);
+        } catch (error) {
+            console.error("Sign out error", error);
+            // Force state clear even if API fails
+            setUser(null);
+            setSession(null);
+        }
     };
 
     return (

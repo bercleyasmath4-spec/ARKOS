@@ -1,7 +1,6 @@
-
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabaseClient.ts';
-import { Fuel, Lock, Mail, ArrowRight, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
+import { Brain, Lock, Mail, ArrowRight, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
 import GlassCard from './GlassCard.tsx';
 
 export default function Login() {
@@ -51,7 +50,7 @@ export default function Login() {
                 <GlassCard className="p-8 border-cyan-500/20 shadow-2xl shadow-cyan-500/5">
                     <div className="flex flex-col items-center mb-8">
                         <div className="w-16 h-16 rounded-full bg-cyan-500/10 flex items-center justify-center mb-6 ring-1 ring-cyan-500/30">
-                            <Fuel size={32} className="text-cyan-400" />
+                            <Brain size={32} className="text-cyan-400" />
                         </div>
                         <h1 className="text-2xl font-light text-white tracking-wider uppercase">My Assistant</h1>
                         <p className="text-[10px] text-cyan-400/60 font-bold tracking-[0.2em] uppercase mt-2">
